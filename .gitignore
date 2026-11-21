@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+# Generated artifacts (rebuild with the pipeline commands in README)
+data/processed/*
+!data/processed/.gitkeep
+models/*
+!models/.gitkeep
+*.db
