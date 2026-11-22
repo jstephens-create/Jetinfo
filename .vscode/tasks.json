@@ -3,8 +3,8 @@
     "tasks": [
         {
             "label": "OKai: Run dashboard",
-            "type": "shell",
-            "command": "powershell",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -32,8 +32,8 @@
         },
         {
             "label": "OKai: Setup only",
-            "type": "shell",
-            "command": "powershell",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -49,8 +49,8 @@
         },
         {
             "label": "OKai: Rebuild data and model",
-            "type": "shell",
-            "command": "powershell",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
             "args": [
                 "-NoProfile",
                 "-ExecutionPolicy",

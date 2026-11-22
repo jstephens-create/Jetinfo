@@ -26,7 +26,10 @@ data/model rebuild, and tests.
 Run **Terminal > Run Task > OKai: Run dashboard**, then open
 <http://localhost:8501>. The task downloads a project-local Python 3.12 runtime
 when needed, installs dependencies, prepares any missing data/model artifacts,
-and starts Streamlit. Later launches reuse the prepared snapshot. The first run requires internet access. Stop it with
+and starts Streamlit. Later launches reuse the prepared snapshot. The first run
+requires internet access. Launcher tasks start Windows PowerShell directly
+rather than going through the active integrated shell, so a broken terminal
+profile cannot prevent them from running. Stop the dashboard with
 **Terminal > Terminate Task** or Ctrl+C in the task terminal.
 
 You can also run the same launcher from PowerShell:
@@ -42,6 +45,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 -RebuildData
 ```
 
 Runtime downloads and caches stay in `.tools/`; packages stay in `.venv/`.
+Pytest uses the ignored project-local `.pytest-tmp/` directory so an inaccessible
+or stale user temp folder does not block the test task.
+
+If an old integrated terminal displays `Could not find pty` or cannot attach to
+its process, it is a dead VS Code terminal session rather than an application
+failure. Use its trash icon to close it, then create a new terminal or run
+**Developer: Reload Window**. The dashboard task is independent of that stale
+terminal. If VS Code offers `Python: Installing uv...` tasks with no command,
+cancel them and use the checked-in `OKai: Setup only` or `OKai: Run dashboard`
+tasks; the launcher already installs uv locally under `.tools\`.
 
 ### Manual setup (Python 3.11+)
 
