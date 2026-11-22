@@ -38,9 +38,33 @@ if (-not (Test-Path -LiteralPath $uv)) {
     Remove-Item -LiteralPath $archive
 }
 
-if (-not (Test-Path -LiteralPath $python)) {
-    Write-Host 'Creating the Python 3.12 environment...'
-    Invoke-Checked -Program $uv -Arguments @('venv', '--python', '3.12', '--managed-python', '.venv')
+$pythonWorks = $false
+$venvConfig = Join-Path $PSScriptRoot '.venv\pyvenv.cfg'
+if ((Test-Path -LiteralPath $python) -and (Test-Path -LiteralPath $venvConfig)) {
+    $pythonHome = $null
+    foreach ($line in Get-Content -LiteralPath $venvConfig) {
+        if ($line -match '^\s*home\s*=\s*(.+?)\s*$') {
+            $pythonHome = $Matches[1].Trim()
+            break
+        }
+    }
+
+    if ($pythonHome -and (Test-Path -LiteralPath (Join-Path $pythonHome 'python.exe'))) {
+        & $python --version *> $null
+        $pythonWorks = $LASTEXITCODE -eq 0
+    }
+}
+
+if (-not $pythonWorks) {
+    $venvArguments = @('venv', '--python', '3.12', '--managed-python')
+    if (Test-Path -LiteralPath '.venv') {
+        Write-Host 'Recreating the stale Python 3.12 environment...'
+        $venvArguments += '--clear'
+    } else {
+        Write-Host 'Creating the Python 3.12 environment...'
+    }
+    $venvArguments += '.venv'
+    Invoke-Checked -Program $uv -Arguments $venvArguments
 }
 
 Write-Host 'Checking project dependencies...'

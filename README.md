@@ -46,7 +46,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\run.ps1 -RebuildData
 
 Runtime downloads and caches stay in `.tools/`; packages stay in `.venv/`.
 Pytest uses the ignored project-local `.pytest-tmp/` directory so an inaccessible
-or stale user temp folder does not block the test task.
+or stale user temp folder does not block the test task. The launcher verifies
+that the local Python executable actually runs and recreates a copied or
+otherwise stale environment whose `pyvenv.cfg` points to another checkout.
+
+If the VS Code integrated terminal itself is unavailable, double-click
+`run.cmd` from File Explorer. It launches the same `run.ps1` setup and dashboard
+in a normal Windows console without depending on a VS Code terminal profile.
 
 If an old integrated terminal displays `Could not find pty` or cannot attach to
 its process, it is a dead VS Code terminal session rather than an application
@@ -54,7 +60,8 @@ failure. Use its trash icon to close it, then create a new terminal or run
 **Developer: Reload Window**. The dashboard task is independent of that stale
 terminal. If VS Code offers `Python: Installing uv...` tasks with no command,
 cancel them and use the checked-in `OKai: Setup only` or `OKai: Run dashboard`
-tasks; the launcher already installs uv locally under `.tools\`.
+tasks, or double-click `run.cmd`; the launcher already installs uv locally
+under `.tools\`.
 
 ### Manual setup (Python 3.11+)
 

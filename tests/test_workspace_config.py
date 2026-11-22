@@ -34,3 +34,19 @@ def test_pytest_uses_a_project_local_temp_directory():
     config.read(ROOT / "pytest.ini", encoding="utf-8")
 
     assert config["pytest"]["addopts"] == "--basetemp=.pytest-tmp"
+
+
+def test_windows_launcher_recovers_stale_copied_environments():
+    launcher = (ROOT / "run.ps1").read_text(encoding="utf-8")
+
+    assert "$pythonWorks" in launcher
+    assert "$pythonHome" in launcher
+    assert "& $python --version" in launcher
+    assert "$venvArguments += '--clear'" in launcher
+
+
+def test_windows_console_fallback_uses_the_repository_launcher():
+    launcher = (ROOT / "run.cmd").read_text(encoding="utf-8")
+
+    assert 'set "REPO_ROOT=%~dp0"' in launcher
+    assert '"%REPO_ROOT%run.ps1" %*' in launcher
