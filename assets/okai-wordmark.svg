@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="116" height="76" viewBox="0 0 116 76">
+  <defs>
+    <linearGradient id="reflection-fade" x1="0" y1="44" x2="0" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="white" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="reflection" x="0" y="44" width="116" height="30" maskUnits="userSpaceOnUse">
+      <rect x="0" y="44" width="116" height="30" fill="url(#reflection-fade)"/>
+    </mask>
+    <g id="wordmark" font-family="Arial, Helvetica, sans-serif" font-size="46" font-weight="900" letter-spacing="-3">
+      <text x="12" y="40" transform="skewX(-8)" fill="#161616">OK<tspan fill="#FF512B">ai</tspan></text>
+    </g>
+  </defs>
+  <use href="#wordmark"/>
+  <!-- A vertical flip around y=43 puts the reflected baseline below the logo. -->
+  <g mask="url(#reflection)">
+    <use href="#wordmark" transform="translate(0 86) scale(1 -1)"/>
+  </g>
+</svg>

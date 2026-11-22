@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from src import database
+from src.calculations import calculate_demo_sla
 from src.config import (CATEGORIES, DB_PATH, OPEN_STATUSES, PROCESSED_CSV, RAW_CSV,
                         REJECTED_CSV, RESOLVED_STATUSES, SLA_TARGET_MINUTES, VALID_STATUSES)
 
@@ -46,7 +47,11 @@ def load_raw(path: Path | str = RAW_CSV) -> pd.DataFrame:
 
 # ------------------------------------------------------------------ profile
 def profile(df: pd.DataFrame) -> dict:
-    """Data-quality snapshot of the raw file, before any cleaning."""
+    """Measure the raw file, before cleaning, at both cell and row level.
+
+    Missing-value counts count cells per column. Duplicate counts count rows.
+    These checks can overlap, so adding them is not a count of rejected rows.
+    """
     return {
         "rows": len(df),
         "missing_values": {c: int(n) for c, n in df.isna().sum().items()},
@@ -75,24 +80,32 @@ def calculate_sla(resolution_minutes: pd.Series, target_minutes: pd.Series) -> t
 
     Returns (sla_breached as nullable 0/1, margin in minutes: positive = time to spare).
     """
-    margin = target_minutes - resolution_minutes
-    breached = (resolution_minutes > target_minutes).astype("Int64")
-    breached[resolution_minutes.isna()] = pd.NA
-    return breached, margin.round(1)
+    # Preserve the public ETL function while giving one backend implementation
+    # authority over demo arithmetic. Real imports retain source-reported flags.
+    return calculate_demo_sla(resolution_minutes, target_minutes)
 
 
 def clean_incidents(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, int]:
-    """Returns (clean rows, rejected rows with 'rejection_reason', duplicates removed)."""
+    """Return (clean rows, rejected rows with reasons, duplicate-row count).
+
+    Keep a copy of the source so validation can produce an auditable rejection
+    report. Correct known label variations; reject values we cannot interpret
+    reliably instead of guessing replacements.
+    """
     df = raw.copy()
     for col in df.columns:  # trim stray whitespace everywhere; blank -> missing
         df[col] = df[col].str.strip().replace("", np.nan)
 
     # 1) Duplicates: the same incident_id twice is the same ticket exported twice.
+    # This export's rule is "keep first", not "keep most recently updated".
+    # Missing IDs are validated separately because they cannot identify a ticket.
     dup_mask = df["incident_id"].duplicated(keep="first") & df["incident_id"].notna()
     duplicates = df[dup_mask].assign(rejection_reason="duplicate incident_id")
     df = df[~dup_mask]
 
     # 2) Parse & standardize (failures become NaN/None and are caught below)
+    # errors="coerce" converts invalid text into a missing marker instead of
+    # stopping the whole batch. Validation can then explain each failed row.
     created = pd.to_datetime(df["created_at"], format=TIMESTAMP_FORMAT, errors="coerce")
     priority = df["priority"].map(standardize_priority)
     category = df["category"].map(standardize_category)
@@ -121,6 +134,8 @@ def clean_incidents(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, int]
         (resolution < response, "resolution_time shorter than response_time"),
     ]
     reasons = pd.Series([[] for _ in range(len(df))], index=df.index)
+    # A row can violate several rules. Store all its reasons, but count that row
+    # once when splitting into clean/rejected data. Rule totals may overlap.
     for failed, message in rules:
         for idx in failed[failed.fillna(False)].index:
             reasons[idx].append(message)
@@ -154,6 +169,7 @@ def clean_incidents(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, int]
 def run_pipeline(raw_path=RAW_CSV, db_path=DB_PATH, processed_path=PROCESSED_CSV,
                  rejected_path=REJECTED_CSV) -> dict:
     database.init_db(db_path)
+    # Record the attempt separately so a failed load still appears in run history.
     with database.connect(db_path) as conn:
         run_id = database.start_run(conn, str(raw_path))
 
@@ -169,6 +185,8 @@ def run_pipeline(raw_path=RAW_CSV, db_path=DB_PATH, processed_path=PROCESSED_CSV
             log.warning("Rejected %d row(s): %s", n, reason)
 
         with database.connect(db_path) as conn:  # one transaction: all or nothing
+            # The incident writes, rejection evidence, and successful run summary
+            # commit together. A database error rolls back this entire batch.
             new = database.upsert_incidents(conn, clean)
             database.insert_rejected(conn, run_id, rejected)
             summary = {"run_id": run_id, "rows_read": len(raw), "rows_loaded": len(clean),
@@ -178,6 +196,8 @@ def run_pipeline(raw_path=RAW_CSV, db_path=DB_PATH, processed_path=PROCESSED_CSV
             database.finish_run(conn, run_id, summary)
 
         Path(processed_path).parent.mkdir(parents=True, exist_ok=True)
+        # CSVs are reviewable exports of this run. They are written after the
+        # database commit, so they are not part of its rollback boundary.
         clean.to_csv(processed_path, index=False)
         rejected.to_csv(rejected_path, index=False)
     except Exception:

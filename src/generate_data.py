@@ -38,8 +38,10 @@ CATEGORY_GROUP = {
     "Database": "Database Admin", "Email": "Service Desk",
 }
 
-# Hidden "real world" drivers of slow resolution. All are knowable at creation time,
-# so the model has genuine signal to learn. Values > 1 slow resolution down.
+# Assumed drivers of slow resolution for this synthetic example. Their inputs
+# are known at creation time, so the model has a pattern to learn without seeing
+# the eventual outcome. Values > 1 slow resolution down. Strong results on these
+# built-in patterns do not establish performance on real incident histories.
 CATEGORY_FACTOR = {"Database": 1.35, "Network": 1.15, "Software": 1.10,
                    "Hardware": 1.00, "Email": 0.85, "Access": 0.80}
 SERVICE_FACTOR = {"ERP": 1.20, "Data Center": 1.20, "Data Warehouse": 1.15}
@@ -74,6 +76,9 @@ def generate_clean(rng: np.random.Generator) -> pd.DataFrame:
             group = "Service Desk"
 
         target = SLA_TARGET_MINUTES[priority]
+        # Lognormal draws are positive and right-skewed: most tickets are near a
+        # typical duration, with some much slower ones. This is a modeling
+        # assumption for the demo, rather than a fit to measured service data.
         response = max(1.0, MEDIAN_RESPONSE[priority] * rng.lognormal(0, 0.5))
 
         factor = CATEGORY_FACTOR[category] * SERVICE_FACTOR.get(service, 1.0)
@@ -84,6 +89,7 @@ def generate_clean(rng: np.random.Generator) -> pd.DataFrame:
         if created.dayofweek >= 5:
             factor *= WEEKEND_FACTOR
         ratio = MEDIAN_RESOLUTION_RATIO[priority] * factor * rng.lognormal(0, 0.45)
+        # A ticket cannot be resolved before its first response in this example.
         resolution = max(response + 5, target * ratio)
 
         rows.append({
@@ -103,6 +109,8 @@ def generate_clean(rng: np.random.Generator) -> pd.DataFrame:
     df["incident_id"] = [f"INC{100001 + i}" for i in range(len(df))]
 
     # The 25 most recent tickets are still being worked: no resolution yet.
+    # Leaving outcomes unknown creates an active queue without inventing labels
+    # for the model to train on.
     recent = df.index[-25:]
     df.loc[recent, "status"] = rng.choice(["Open", "In Progress"], size=len(recent))
     df.loc[recent, "resolution_time_minutes"] = np.nan
@@ -118,6 +126,8 @@ def generate_clean(rng: np.random.Generator) -> pd.DataFrame:
 
 def inject_quality_issues(df: pd.DataFrame, rng: np.random.Generator) -> pd.DataFrame:
     """Make the data look like a real export: messy labels, gaps, bad values, duplicates."""
+    # object dtype allows deliberately mixing text, numbers, and missing values,
+    # just as a CSV export can contain a number in one row and "N/A" in another.
     df = df.astype(object).copy()
     resolved_idx = df.index[df["status"].isin(["Closed", "Resolved"])].to_numpy()
     pool = rng.permutation(resolved_idx)  # distinct rows for each fatal problem
@@ -156,12 +166,16 @@ def inject_quality_issues(df: pd.DataFrame, rng: np.random.Generator) -> pd.Data
         df.at[i, "assignment_group"] = f"  {df.at[i, 'assignment_group']} "
 
     # --- Duplicate rows (same ticket exported twice) ---
+    # Duplication happens after corruption, so a copied row may already have a
+    # missing cell. Quality-check counts therefore need not be mutually exclusive.
     dupes = df.loc[rng.choice(df.index, size=N_DUPLICATES, replace=False)]
     df = pd.concat([df, dupes], ignore_index=True)
     return df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
 
 
 def main() -> pd.DataFrame:
+    # Pass one seeded generator through both stages: identical code and seed
+    # reproduce both the incidents and the injected errors for demonstrations.
     rng = np.random.default_rng(RANDOM_SEED)
     raw = inject_quality_issues(generate_clean(rng), rng)
     RAW_CSV.parent.mkdir(parents=True, exist_ok=True)

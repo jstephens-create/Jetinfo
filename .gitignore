@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+.tools/
+data/imports/
 venv/
 # Generated artifacts (rebuild with the pipeline commands in README)
 data/processed/*

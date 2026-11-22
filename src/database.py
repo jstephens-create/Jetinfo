@@ -1,7 +1,7 @@
 """SQLite storage layer: schema, safe writes, and SQL metric queries.
 
-Every other component talks to the database through these functions, so SQL
-lives in one file and the dashboard never writes to the database.
+SQL for incident facts and analytical metrics lives here. The dashboard reads
+these source facts; demo review writes use separate tables in src/demo.py.
 """
 import json
 import sqlite3
@@ -73,9 +73,15 @@ def _now() -> str:
 
 @contextmanager
 def connect(db_path: Path | str = DB_PATH):
-    """Open a connection, commit on success, roll back on error, always close."""
+    """Open a connection, commit on success, roll back on error, always close.
+
+    A caller's ``with connect(...) as conn`` block defines one transaction for
+    its ordinary SQL writes. Related rows are saved together or not at all.
+    """
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    # SQLite requires this switch for each connection; REFERENCES declarations
+    # alone do not enforce that predictions/rejections point to existing parents.
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
@@ -113,10 +119,14 @@ def upsert_incidents(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     updates = ", ".join(f"{c}=excluded.{c}" for c in cols if c != "incident_id")
     sql = (f"INSERT INTO incidents ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))}) "
            f"ON CONFLICT(incident_id) DO UPDATE SET {updates}")
+    # Column names come from our fixed list. Question marks bind row VALUES
+    # separately from SQL, so quotes in source text are handled as data.
     loaded_at = _now()
     rows = [tuple(_clean_value(r[c]) for c in INCIDENT_COLUMNS) + (loaded_at,)
             for r in df[INCIDENT_COLUMNS].to_dict("records")]
     conn.executemany(sql, rows)
+    # Updates are not new incidents. Comparing table sizes gives the number of
+    # newly inserted IDs, rather than the number of rows processed in this run.
     after = conn.execute("SELECT COUNT(*) FROM incidents").fetchone()[0]
     return after - before
 
@@ -147,6 +157,9 @@ def insert_rejected(conn: sqlite3.Connection, run_id: int, rejected: pd.DataFram
 
 def save_predictions(conn: sqlite3.Connection, df: pd.DataFrame) -> None:
     """Replace all predictions with the latest model's scores."""
+    # This table is a current snapshot, not a model/prediction history. DELETE and
+    # INSERT share the caller's transaction so readers never get a committed
+    # half-replaced snapshot.
     conn.execute("DELETE FROM predictions")
     scored_at = _now()
     conn.executemany(
@@ -161,42 +174,53 @@ def query(sql: str, db_path: Path | str = DB_PATH, params: tuple = ()) -> pd.Dat
 
 
 def read_incidents(db_path: Path | str = DB_PATH) -> pd.DataFrame:
+    # A LEFT JOIN preserves incidents that have not been scored yet; an INNER
+    # JOIN would silently remove them from the dashboard's incident population.
     return query("""SELECT i.*, p.breach_probability, p.risk_level
                     FROM incidents i LEFT JOIN predictions p USING (incident_id)
                     ORDER BY i.created_at""", db_path)
 
 
-# ---------------------------------------------------------------- SQL metrics
-# Compliance is measured on RESOLVED incidents only (open ones have no outcome yet).
+# ------------------------------------------------ compatibility metric reads
+# Keep these long-standing names for callers, while the shared calculation
+# engine owns numerical definitions used by dashboards, tools, and inspectors.
+def calculation_engine(db_path=DB_PATH):
+    """Build an explicitly synthetic engine without mixing imported histories.
+
+    Local imports avoid a dependency cycle: calculations never imports storage,
+    and ETL can still import the database while using the shared SLA helper.
+    """
+    from src.calculations import CalculationContext, CalculationEngine
+    incidents = read_incidents(db_path)
+    start = incidents.created_at.min() if not incidents.empty else None
+    end = incidents.created_at.max() if not incidents.empty else None
+    context = CalculationContext("synthetic-demo", "Seeded synthetic incidents", source_kind="demo",
+                                 observation_start=start, observation_end=end)
+    return CalculationEngine(incidents, context=context)
+
+
 def kpi_summary(db_path=DB_PATH) -> dict:
-    return query("""
-        SELECT COUNT(*)                                                     AS total_incidents,
-               ROUND(100.0 * SUM(sla_breached = 0) / COUNT(sla_breached), 1) AS sla_compliance_pct,
-               ROUND(AVG(resolution_time_minutes) / 60.0, 1)                AS avg_resolution_hours,
-               SUM(priority IN ('Critical','High'))                         AS high_priority_incidents,
-               SUM(sla_breached IS NULL)                                    AS open_incidents
-        FROM incidents""", db_path).iloc[0].to_dict()
+    """Return legacy keys using the same definitions as the inspector."""
+    engine = calculation_engine(db_path)
+    return {"total_incidents": engine.calculate("unique_incident_count").value,
+            "sla_compliance_pct": engine.calculate("demo_sla_attainment").value,
+            "avg_resolution_hours": engine.calculate("mean_resolution_hours").value,
+            "high_priority_incidents": engine.calculate("high_priority_incident_count").value,
+            "open_incidents": engine.calculate("unresolved_incident_count").value}
 
 
 def sla_by_dimension(dimension: str, db_path=DB_PATH) -> pd.DataFrame:
-    allowed = {"priority", "category", "assignment_group", "affected_service"}
-    if dimension not in allowed:  # never interpolate untrusted text into SQL
-        raise ValueError(f"dimension must be one of {allowed}")
-    return query(f"""
-        SELECT {dimension}                                                   AS dimension,
-               COUNT(*)                                                      AS incidents,
-               SUM(sla_breached)                                             AS breaches,
-               ROUND(100.0 * SUM(sla_breached = 0) / COUNT(sla_breached), 1) AS compliance_pct,
-               ROUND(AVG(resolution_time_minutes) / 60.0, 1)                 AS avg_resolution_hours
-        FROM incidents GROUP BY {dimension} ORDER BY compliance_pct""", db_path)
+    """Aggregate each group, retaining distinct denominators for volume and SLA.
+
+    ``incidents`` counts every ticket in a group; ``compliance_pct`` uses only
+    tickets with known outcomes. Group percentages should not be averaged to
+    produce overall compliance: recompute it from the underlying outcome counts.
+    """
+    return calculation_engine(db_path).by_dimension(dimension)
 
 
 def monthly_trend(db_path=DB_PATH) -> pd.DataFrame:
-    return query("""
-        SELECT strftime('%Y-%m', created_at)                                AS month,
-               COUNT(*)                                                     AS incidents,
-               ROUND(100.0 * SUM(sla_breached = 0) / COUNT(sla_breached), 1) AS compliance_pct
-        FROM incidents GROUP BY month ORDER BY month""", db_path)
+    return calculation_engine(db_path).monthly_trend()
 
 
 def run_history(db_path=DB_PATH) -> pd.DataFrame:

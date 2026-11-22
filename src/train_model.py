@@ -63,35 +63,55 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     validate_model_input(df)
     created = pd.to_datetime(df["created_at"], format=TIMESTAMP_FORMAT)
     hour = created.dt.hour
+    # An allowlist is safer than dropping a few known bad columns: a newly added
+    # outcome field will not accidentally become an input. Leakage makes a model
+    # look strong in testing by giving it information unavailable when scoring.
     X = df[["priority", "category", "affected_service", "assignment_group"]].copy()
     X["shift"] = np.select([hour.between(8, 17), hour.between(18, 23)],
                            ["business hours", "evening"], default="overnight")
-    X["is_weekend"] = (created.dt.dayofweek >= 5).astype(int)
+    X["is_weekend"] = (created.dt.day_of_week >= 5).astype(int)
     leaked = LEAKAGE_COLUMNS & set(X.columns)
     assert not leaked, f"Leakage columns in features: {leaked}"
     return X[FEATURES]
 
 
 def make_pipeline() -> Pipeline:
+    """Bundle learned preprocessing and classification into one saved object."""
+    # One-hot encoding gives each category a separate 0/1 column. Treating names
+    # as 1, 2, 3 would invent numerical distances between unrelated categories.
+    # An unseen category becomes all zeros for that field instead of crashing.
     encoder = OneHotEncoder(handle_unknown="ignore")
     pre = ColumnTransformer([("cat", encoder, CATEGORICAL_FEATURES),
                              ("bin", "passthrough", BINARY_FEATURES)],
                             verbose_feature_names_out=False)
-    # class_weight='balanced' stops the model ignoring the minority class (breaches).
-    # Trade-off: probabilities lean higher than the true base rate -> treat as relative risk.
+    # 'balanced' weights each class inversely to its frequency, giving individual
+    # minority-class breaches more influence during fitting. This changes the
+    # learning objective; use these uncalibrated scores as relative risk signals.
     model = LogisticRegression(max_iter=1000, C=1.0, class_weight="balanced")
+    # The Pipeline fits the encoder only on training rows, then reuses that same
+    # mapping at prediction time. This prevents train/test preprocessing drift.
     return Pipeline([("features", pre), ("model", model)])
 
 
 # ------------------------------------------------------------------ evaluation
 def chronological_split(df: pd.DataFrame, test_fraction: float = TEST_FRACTION):
-    """Train on the past, test on the future - exactly how the model will be used."""
+    """Hold out the newest rows to approximate scoring later incident arrivals.
+
+    This is a creation-time split, not a simulation of when historical outcome
+    labels became available. Equal creation timestamps can straddle the cut.
+    """
     df = df.sort_values("created_at").reset_index(drop=True)
     cut = int(len(df) * (1 - test_fraction))
     return df.iloc[:cut], df.iloc[cut:]
 
 
 def evaluate(y_true, proba, threshold=DECISION_THRESHOLD) -> dict:
+    """Compare known outcomes with held-out scores and thresholded predictions.
+
+    Precision asks how many alerts were correct; recall asks how many breaches
+    were caught. F1 balances those measures. AUC evaluates ranking across
+    thresholds, so it is undefined when the test set has only one outcome class.
+    """
     y_pred = (np.asarray(proba) >= threshold).astype(int)
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
     has_both = len(set(y_true)) == 2
@@ -107,6 +127,8 @@ def evaluate(y_true, proba, threshold=DECISION_THRESHOLD) -> dict:
 def priority_baseline(train: pd.DataFrame, test: pd.DataFrame) -> np.ndarray:
     """Rule of thumb an ops lead might use: 'breach risk = historical breach rate of this priority'."""
     rates = train.groupby("priority")[TARGET].mean()
+    # Learn this rule from training data only. A priority absent from that period
+    # falls back to its overall breach rate rather than consulting test outcomes.
     return test["priority"].map(rates).fillna(train[TARGET].mean()).to_numpy()
 
 
@@ -120,6 +142,11 @@ def feature_names(pipe: Pipeline) -> list[str]:
 
 
 def coefficients(pipe: Pipeline) -> pd.DataFrame:
+    """Summarize learned weights; exponentiating a log-odds weight gives an odds ratio.
+
+    An odds multiplier of 2 is not twice the probability. These are associations
+    conditional on this model's other inputs, not causal effects.
+    """
     names = feature_names(pipe)
     coefs = pipe.named_steps["model"].coef_[0]
     return (pd.DataFrame({"feature": names, "coefficient": coefs.round(3),
@@ -143,6 +170,7 @@ def explain(pipe: Pipeline, incident: pd.DataFrame) -> pd.DataFrame:
 
 
 def predict(pipe: Pipeline, df: pd.DataFrame) -> np.ndarray:
+    # With training labels 0=met and 1=breached, column 1 is the breach score.
     return pipe.predict_proba(build_features(df))[:, 1]
 
 
@@ -157,6 +185,8 @@ def train(db_path=DB_PATH, model_path=MODEL_PATH, metrics_path=METRICS_PATH) -> 
              len(test_df), test_df.created_at.min()[:10], test_df.created_at.max()[:10])
 
     pipe = make_pipeline().fit(build_features(train_df), train_df[TARGET])
+    # Test outcomes are used only after fitting. Computing quality on training
+    # rows would reward memorizing this sample rather than estimating new cases.
     proba = predict(pipe, test_df)
     y_test = test_df[TARGET].to_numpy()
 
@@ -180,13 +210,17 @@ def train(db_path=DB_PATH, model_path=MODEL_PATH, metrics_path=METRICS_PATH) -> 
         "decision_threshold": DECISION_THRESHOLD,
     }
 
-    # Refit on ALL labelled history for production scoring (evaluation above stays honest).
+    # Evaluation is finished before this separate refit uses all labelled rows.
+    # The saved model benefits from all available history, but the stored test
+    # metrics and coefficients describe the earlier holdout model, not this one.
     final = make_pipeline().fit(build_features(labelled), labelled[TARGET])
     model_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(final, model_path)
     metrics_path.write_text(json.dumps(metrics, indent=2))
 
     scores = incidents[["incident_id"]].copy()
+    # Historical tickets are also scored for exploration. Those scores come from
+    # a model that trained on their labels and are not out-of-sample evidence.
     scores["breach_probability"] = predict(final, incidents)
     scores["risk_level"] = scores["breach_probability"].map(risk_level)
     with database.connect(db_path) as conn:
