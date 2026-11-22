@@ -29,6 +29,57 @@
             "runOptions": {
                 "instanceLimit": 1
             }
+        },
+        {
+            "label": "OKai: Setup only",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\run.ps1",
+                "-SetupOnly"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "OKai: Rebuild data and model",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\run.ps1",
+                "-RebuildData",
+                "-SetupOnly"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "OKai: Run tests",
+            "type": "process",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "args": [
+                "-m",
+                "pytest",
+                "-p",
+                "no:cacheprovider"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "test",
+            "problemMatcher": []
         }
     ]
 }

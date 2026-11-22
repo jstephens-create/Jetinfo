@@ -16,6 +16,13 @@ The [metric reference](docs/METRICS.md), [event-log case study](docs/CASE_STUDY.
 
 ### Windows / VS Code
 
+Open the `Jetinfo` folder itself in VS Code (File > Open Folder). It is the
+application's Git repository; the enclosing `signal-project` folder is a separate
+repository. Use the Source Control branch label to confirm you are working on
+`Jetinfo` before committing. The project's VS Code settings select its local
+Python environment and discover tests. Terminal > Run Task also offers setup,
+data/model rebuild, and tests.
+
 Run **Terminal > Run Task > OKai: Run dashboard**, then open
 <http://localhost:8501>. The task downloads a project-local Python 3.12 runtime
 when needed, installs dependencies, prepares any missing data/model artifacts,
