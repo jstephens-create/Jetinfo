@@ -207,7 +207,7 @@ def main():
     elif page == "Import Desk":
         intelligence_views.import_desk()
     elif page == "Calculation Inspector":
-        intelligence_views.calculation_inspector(engine)
+        intelligence_views.calculation_inspector(engine, role)
     elif page == "Decision Support":
         intelligence_views.decision_support(engine)
     elif page == "Settings & Governance":

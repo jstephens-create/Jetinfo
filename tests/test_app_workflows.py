@@ -95,6 +95,7 @@ def test_demo_navigation_inspector_and_explicit_missing_scenario(application_dat
     result = inspection_json(app)["result"]
     assert result["value"] == 100.0
     assert (result["eligible_count"], result["excluded_count"]) == (1, 1)
+    app.radio(key="inspector_group").set_value("needs_inputs").run()
     app.selectbox(key="inspector_metric").select("time_reduction_pct").run()
     assert inspection_json(app)["result"]["status"] == "unavailable"
     app.number_input(key="scenario_time_reduction_pct_baseline_hours").set_value(0.0)
@@ -106,6 +107,26 @@ def test_demo_navigation_inspector_and_explicit_missing_scenario(application_dat
         assert not app.exception, page
 
 
+def test_cost_per_incident_flow_uses_source_count_only_when_confirmed(application_data):
+    app = enter_manager()
+    app.button(key="inspect_overview_demo_sla_attainment").click().run()
+    app.radio(key="inspector_group").set_value("needs_inputs").run()
+    app.selectbox(key="inspector_metric").select("cost_per_incident").run()
+    assert not app.exception
+    assert inspection_json(app)["result"]["status"] == "unavailable"
+    app.selectbox(key="currency_cost_per_incident").select("USD").run()
+    app.number_input(key="scenario_cost_per_incident_operational_cost").set_value(1000.0).run()
+    assert inspection_json(app)["result"]["status"] == "unavailable"
+    basis = next(r for r in app.radio if r.key.startswith("count_basis_cost_per_incident_"))
+    assert basis.value is None and "unique incidents" in basis.options[0]
+    basis.set_value(basis.options[0]).run()
+    assert not app.exception
+    result = inspection_json(app)["result"]
+    assert (result["value"], result["unit"], result["denominator"]) == (500.0, "USD/incident", 2)
+    assert len(app.dataframe[-1].value) == 2
+    assert any("your assumption" in n.label for n in app.number_input)
+
+
 def test_imported_source_counts_events_separately_and_never_scores_snapshot(application_data):
     imported, _ = application_data
     app = enter_manager()
@@ -113,7 +134,7 @@ def test_imported_source_counts_events_separately_and_never_scores_snapshot(appl
     assert not app.exception
     app.button(key="inspect_overview_total_event_count").click().run()
     assert inspection_json(app)["result"]["value"] == 4
-    assert len(app.dataframe[0].value) == 4
+    assert len(app.dataframe[-1].value) == 4
     app.selectbox(key="inspector_metric").select("source_sla_attainment").run()
     result = inspection_json(app)["result"]
     assert result["value"] == 50.0

@@ -30,7 +30,11 @@ and starts Streamlit. Later launches reuse the prepared snapshot. The first run
 requires internet access. Launcher tasks start Windows PowerShell directly
 rather than going through the active integrated shell, so a broken terminal
 profile cannot prevent them from running. Stop the dashboard with
-**Terminal > Terminate Task** or Ctrl+C in the task terminal.
+**Terminal > Terminate Task** or Ctrl+C in the task terminal. The workspace also
+offers *Setup only*, *Rebuild data and model*, and *Run tests* tasks. See
+[guided flows by persona](docs/GUIDED_FLOWS.md) for the Calculation Inspector
+flow and the [visual code study guide](docs/CODE_STUDY_GUIDE.md) for a guided
+tour from UI to implementation.
 
 You can also run the same launcher from PowerShell:
 

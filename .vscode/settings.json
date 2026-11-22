@@ -5,5 +5,24 @@
     "python.testing.pytestArgs": [
         "tests"
     ],
-    "terminal.integrated.cwd": "${workspaceFolder}"
+    "terminal.integrated.cwd": "${workspaceFolder}",
+    "breadcrumbs.enabled": true,
+    "editor.minimap.enabled": true,
+    "editor.stickyScroll.enabled": true,
+    "explorer.compactFolders": false,
+    "files.exclude": {
+        "**/.pytest_cache": true,
+        "**/.pytest-tmp": true,
+        "**/__pycache__": true,
+        "**/.tools": true
+    },
+    "python.analysis.exclude": [
+        "${workspaceFolder}/.venv",
+        "${workspaceFolder}/.tools"
+    ],
+    "sqliteViewer.databaseFileNames": [
+        "*.db",
+        "*.sqlite",
+        "*.sqlite3"
+    ]
 }

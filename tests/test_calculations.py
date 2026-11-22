@@ -359,3 +359,46 @@ def test_historical_compatibility_wrappers_use_shared_engine(make_raw, db_path):
     pd.testing.assert_frame_equal(database.monthly_trend(db_path), engine.monthly_trend())
     with pytest.raises(ValueError, match="Unsupported"):
         database.sla_by_dimension("priority; DROP TABLE incidents", db_path)
+
+
+def _non_scenario(engine):
+    return {metric_id: row for metric_id, row in engine.metric_availability().items() if row.group != "needs_inputs"}
+
+
+def _calculated(engine, metric_id):
+    return engine.calculate(metric_id, {"field": "status"} if metric_id == "field_completeness" else None)
+
+
+def test_availability_groups_match_real_calculations_for_an_event_log(source_frame):
+    events = pd.DataFrame({"incident_id": ["A", "B"], "source_row": [1, 2], "event_at": ["2024-01-01"] * 2})
+    for engine, absent in [(engine_for(source_frame, events), {"demo_sla_attainment"}),
+                           (engine_for(source_frame[["incident_id", "status"]]), {
+                               "total_event_count", "demo_sla_attainment", "source_sla_attainment",
+                               "mean_resolution_hours", "median_resolution_hours", "assignment_completeness",
+                               "high_priority_incident_count"})]:
+        rows = _non_scenario(engine)
+        for metric_id, row in rows.items():
+            assert (row.group == "unavailable") == (metric_id in absent), metric_id
+            assert (_calculated(engine, metric_id).status == "unavailable") == (row.group == "unavailable"), metric_id
+            assert row.reason if row.group == "unavailable" else row.reason is None
+
+
+def test_availability_groups_match_real_calculations_for_the_demo(make_raw, db_path):
+    from src.etl import clean_incidents
+    database.init_db(db_path)
+    with database.connect(db_path) as conn:
+        database.upsert_incidents(conn, clean_incidents(make_raw({"incident_id": "A"}))[0])
+    engine = database.calculation_engine(db_path)
+    rows = _non_scenario(engine)
+    assert {m for m, row in rows.items() if row.group == "unavailable"} == {"total_event_count", "source_sla_attainment"}
+    for metric_id, row in rows.items():
+        assert (_calculated(engine, metric_id).status == "unavailable") == (row.group == "unavailable"), metric_id
+
+
+def test_scenario_metrics_need_inputs_and_list_them(source_frame):
+    rows = engine_for(source_frame).metric_availability()
+    assert rows["cost_per_incident"].group == "needs_inputs"
+    assert rows["cost_per_incident"].required_inputs == ("operational_cost", "incident_count", "currency")
+    assert {m for m, row in rows.items() if row.group == "needs_inputs"} == {
+        "time_saved_hours", "time_reduction_pct", "estimated_labor_value",
+        "processing_throughput", "cost_per_incident"}

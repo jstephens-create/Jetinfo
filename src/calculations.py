@@ -177,6 +177,18 @@ class CalculationResult:
         return asdict(self)
 
 
+AVAILABLE, NEEDS_INPUTS, UNAVAILABLE = "available", "needs_inputs", "unavailable"
+
+
+@dataclass(frozen=True)
+class MetricAvailability:
+    """Whether a source supplies what a metric needs, before any calculation runs."""
+    metric_id: str
+    group: str
+    reason: str | None = None
+    required_inputs: tuple[str, ...] = ()
+
+
 def calculate_demo_sla(resolution_minutes: pd.Series, target_minutes: pd.Series) -> tuple[pd.Series, pd.Series]:
     """Compatibility helper for the explicitly configured synthetic demo policy.
 
@@ -499,6 +511,41 @@ class CalculationEngine:
             return self._result(metric_id, value, int(valid.sum()), int((~valid).sum()), count,
                                 reason="No recognized priorities." if value is None else None), self._membership(valid, reasons, high)
         raise AssertionError("Registered metric has no implementation.")
+
+    def metric_availability(self) -> dict[str, MetricAvailability]:
+        """Group every metric by what this source supplies, without calculating it.
+
+        Checking the required columns is cheap; calculating every metric on a
+        large import is not. A metric can still be unavailable later (for
+        example, no resolved incidents), and calculate() reports that reason.
+        """
+        columns = set(self.incidents.columns)
+        demo = self.context.source_kind == "demo"
+        has_events = self.events is not None and {"incident_id", "event_at"} <= set(self.events.columns)
+        rows = {}
+        for metric_id, definition in self.registry.items():
+            if metric_id in SCENARIO_PARAMETERS:
+                rows[metric_id] = MetricAvailability(metric_id, NEEDS_INPUTS, required_inputs=definition.required_fields)
+                continue
+            reason = None
+            if metric_id == "total_event_count":
+                if not has_events:
+                    reason = "This source is an incident snapshot with no event history."
+            elif metric_id == "demo_sla_attainment":
+                if not demo:
+                    reason = "The demo SLA policy applies only to the synthetic demo."
+            elif metric_id == "field_completeness":
+                if not columns & COMPLETENESS_FIELDS:
+                    reason = "This source has no supported completeness field."
+            else:
+                required = definition.required_fields
+                if demo and metric_id in {"mean_resolution_hours", "median_resolution_hours"}:
+                    required = ("status", "resolution_time_minutes")
+                missing = [name for name in required if name not in columns]
+                if missing:
+                    reason = f"This source has no {', '.join(missing)} field."
+            rows[metric_id] = MetricAvailability(metric_id, UNAVAILABLE if reason else AVAILABLE, reason)
+        return rows
 
     def calculate(self, metric_id: str, parameters: Mapping[str, Any] | None = None) -> CalculationResult:
         return self._compute(metric_id, parameters)[0]

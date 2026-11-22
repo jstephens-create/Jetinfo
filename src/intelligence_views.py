@@ -7,6 +7,7 @@ write to a widget's state after that widget has already been rendered.
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
+from typing import NamedTuple
 import json
 import sqlite3
 
@@ -15,11 +16,15 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src import demo, ui
-from src.calculations import (CalculationContext, CalculationEngine, ThresholdConfig,
+from src.calculations import (AVAILABLE, NEEDS_INPUTS, SCENARIO_PARAMETERS, UNAVAILABLE,
+                              CalculationContext, CalculationEngine, ThresholdConfig,
                               COMPLETENESS_FIELDS)
 from src.calculation_tools import TOOL_SCHEMA, execute_metric_tool
 from src import event_ingestion as imports
 from src.config import ROOT
+from src.guidance import (ASSUMPTION_TAG, CURRENCIES, GROUP_LABELS, INPUT_SPECS, ORIGIN_ENTERED, ORIGIN_SOURCE,
+                          OTHER_CURRENCY, ROLE_GOALS, inspector_actions, next_step, source_incident_count,
+                          validate_currency, worked_formula)
 
 GROUP_COLUMN_LABELS = {
     "dimension": "Group", "incidents": "Unique incidents", "breaches": "Outcomes reported or calculated as missed",
@@ -100,6 +105,9 @@ def format_value(result):
     if result.unit in {"hours", "hour", "h"}:
         return f"{value:,.1f}h"
     if isinstance(value, (int, float)):
+        currency = result.unit.split("/")[0].split(" ")[0]
+        if len(currency) == 3 and currency.isalpha() and currency.isupper():
+            return f"{value:,.2f} {currency}"
         return f"{value:,}" if float(value).is_integer() else f"{value:,.2f}"
     return str(value)
 
@@ -249,39 +257,148 @@ def import_desk():
         st.dataframe(history, hide_index=True, width="stretch")
 
 
-def _scenario_parameters(metric_id):
-    fields = {
-        "time_saved_hours": ["baseline_hours", "observed_hours"],
-        "time_reduction_pct": ["baseline_hours", "observed_hours"],
-        "estimated_labor_value": ["hours_saved", "hourly_labor_cost"],
-        "processing_throughput": ["processed_records", "elapsed_seconds"],
-        "cost_per_incident": ["operational_cost", "incident_count"],
-    }.get(metric_id, [])
-    parameters = {}
-    if fields:
-        st.caption("Enter measured values or explicit scenario assumptions. Blank inputs produce an unavailable result.")
-        for field in fields:
-            parameters[field] = st.number_input(field.replace("_", " ").title(), min_value=None if field == "hours_saved" else 0.0,
-                value=None, key=f"scenario_{metric_id}_{field}", placeholder="Required input")
-        if metric_id in {"estimated_labor_value", "cost_per_incident"}:
-            parameters["currency"] = st.text_input("Currency code", value="", key=f"currency_{metric_id}",
-                                                    placeholder="For example USD")
-    return parameters
+class ScenarioInputs(NamedTuple):
+    parameters: dict
+    origins: dict
+    evidence_metric: str | None = None
 
 
-def calculation_inspector(engine):
+def _currency_input(metric_id):
+    choice = st.selectbox("Currency · selected by you", [*CURRENCIES, OTHER_CURRENCY], index=None,
+                          key=f"currency_{metric_id}", placeholder="Choose a currency",
+                          format_func=lambda code: f"{code} — {CURRENCIES[code]}" if code in CURRENCIES else code)
+    if choice != OTHER_CURRENCY:
+        return choice
+    typed = st.text_input("Three-letter currency code", max_chars=3, key=f"currency_other_{metric_id}",
+                          placeholder="For example, THB")
+    code = validate_currency(typed)
+    if typed and code is None:
+        st.error("Use a three-letter currency code made of letters, such as THB.")
+    return code
+
+
+def _incident_count_input(engine, metric_id):
+    """Offer the source count only as an explicit claim that the cost covers the same incidents."""
+    count, why = source_incident_count(engine)
+    manual = "Cost covers a different set of incidents (enter the count)"
+    options = [manual]
+    if count:
+        options.insert(0, f"Cost covers all {count:,} unique incidents in this source")
+    else:
+        st.caption(f"Source incident count unavailable: {why}")
+    # The dataset ID in the key drops a stale confirmation when the source changes.
+    choice = st.radio("Eligible incident count", options, key=f"count_basis_{metric_id}_{engine.context.dataset_id}",
+                      index=None if count else 0,
+                      help="Choose the source count only if the cost you entered covers every incident counted here. "
+                           "Events are not incidents: one incident can have many events.")
+    if count and choice == options[0]:
+        st.caption(f"Using {count:,} unique incidents from {engine.context.source_name}.")
+        return count, ORIGIN_SOURCE + " · you confirmed the cost covers all of them", "unique_incident_count"
+    if choice == manual:
+        spec = INPUT_SPECS["incident_count"]
+        value = st.number_input(f"{spec.label} · {ASSUMPTION_TAG}", min_value=1, step=1, value=None,
+                                key=f"scenario_{metric_id}_incident_count", placeholder="Required input", help=spec.help)
+        return value, ORIGIN_ENTERED, None
+    return None, "Not chosen yet", None
+
+
+def _scenario_parameters(engine, metric_id):
+    """Collect scenario inputs, labelling each as measured from the source or assumed by the user."""
+    names = [name for name in engine.registry[metric_id].required_fields]
+    if metric_id not in SCENARIO_PARAMETERS:
+        return ScenarioInputs({}, {})
+    st.caption("Values typed here are your assumptions. OKai does not measure or verify them; "
+               "they stay labelled as assumptions in the result.")
+    parameters, origins, evidence_metric = {}, {}, None
+    for name in names:
+        if name == "currency":
+            parameters[name] = _currency_input(metric_id)
+            origins[name] = "Selected by you"
+        elif metric_id == "cost_per_incident" and name == "incident_count":
+            parameters[name], origins[name], evidence_metric = _incident_count_input(engine, metric_id)
+        else:
+            spec = INPUT_SPECS[name]
+            kind = spec.kind
+            parameters[name] = st.number_input(
+                f"{spec.label} · {ASSUMPTION_TAG}", help=spec.help, key=f"scenario_{metric_id}_{name}",
+                value=None, placeholder="Required input",
+                min_value=None if kind == "signed_hours" else (0 if kind == "count" else 0.0),
+                step=1 if kind == "count" else None, format="%.2f" if kind == "money" else None)
+            origins[name] = ORIGIN_ENTERED
+    return ScenarioInputs(parameters, origins, evidence_metric)
+
+
+def _group_table(engine, group, ids, availability):
+    rows = []
+    for metric_id in ids:
+        definition = engine.registry[metric_id]
+        if group == AVAILABLE:
+            rows.append({"Metric": definition.name, "Source fields used": ", ".join(definition.required_fields),
+                         "Counts": definition.unit_of_analysis})
+        elif group == NEEDS_INPUTS:
+            rows.append({"Metric": definition.name, "Inputs you provide": ", ".join(
+                INPUT_SPECS[name].label if name in INPUT_SPECS else name.replace("_", " ").title()
+                for name in availability[metric_id].required_inputs)})
+        else:
+            rows.append({"Metric": definition.name, "Why unavailable": availability[metric_id].reason,
+                         "What to do next": next_step(metric_id, engine.context.source_kind).note})
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+
+def _choose_group(groups):
+    ids = groups.get(st.session_state["inspector_group"])
+    if ids:
+        st.session_state["inspector_metric"] = ids[0]
+
+
+def _show_excluded():
+    st.session_state["inspector_evidence"] = "Excluded"
+
+
+def _render_action(action, evidence_csv, metric_id):
+    kind = "primary" if action.primary else "secondary"
+    if action.kind == "hint":
+        st.info(f"**Next:** {action.label}")
+    elif action.action_id == "export":
+        st.download_button(action.label, evidence_csv, f"okai_{metric_id}_evidence.csv", "text/csv",
+                           key="inspector_export", type=kind, disabled=not action.enabled, width="stretch")
+    else:
+        callback, args = (_show_excluded, ()) if action.action_id == "excluded" else (
+            navigate, (action.page or "Calculation Inspector", action.metric_id))
+        st.button(action.label, key=f"inspector_action_{action.action_id}", type=kind,
+                  disabled=not action.enabled, on_click=callback, args=args, width="stretch")
+    st.caption(action.note)
+
+
+def calculation_inspector(engine, role=None):
     ui.section("CALCULATION INSPECTOR", "Follow the number to its evidence.",
                "Definitions, results, and contributing records come from the same backend used by the dashboard.")
     source_scope(engine)
-    metric_ids = list(engine.registry)
-    if st.session_state.get("inspector_metric") not in metric_ids:
+    if role in ROLE_GOALS:
+        st.caption(f"Your goal as {role}: {ROLE_GOALS[role]}")
+    availability = engine.metric_availability()
+    groups = {group: [metric_id for metric_id, row in availability.items() if row.group == group]
+              for group in GROUP_LABELS}
+    groups = {group: ids for group, ids in groups.items() if ids}
+    if st.session_state.get("inspector_metric") not in availability:
         st.session_state["inspector_metric"] = "unique_incident_count"
-    selected = st.selectbox("Metric", metric_ids, key="inspector_metric",
+    # A source change or a link from another page can move the metric to another group.
+    st.session_state["inspector_group"] = availability[st.session_state["inspector_metric"]].group
+    group = st.session_state["inspector_group"]
+    st.radio("Metric group", list(groups), key="inspector_group", horizontal=True, on_change=_choose_group,
+             args=(groups,), format_func=lambda key: f"{GROUP_LABELS[key]} ({len(groups[key])})")
+    with st.expander(f"Metrics in “{GROUP_LABELS[group]}”", expanded=group == UNAVAILABLE):
+        _group_table(engine, group, groups[group], availability)
+    selected = st.selectbox("Metric", groups[group], key="inspector_metric",
                             format_func=lambda key: engine.registry[key].name)
-    parameters = _scenario_parameters(selected)
+    if group == UNAVAILABLE:
+        step = next_step(selected, engine.context.source_kind)
+        st.warning(f"Unavailable from this source: {availability[selected].reason} {step.note}")
+    inputs = _scenario_parameters(engine, selected)
+    parameters = inputs.parameters
     if selected == "field_completeness":
         parameters["field"] = st.selectbox("Incident field", [column for column in engine.incidents.columns
-                                                               if column in COMPLETENESS_FIELDS])
+                                                               if column in COMPLETENESS_FIELDS], key="inspector_field")
     try:
         inspection = engine.inspect(selected, parameters=parameters)
     except ValueError as exc:
@@ -297,6 +414,12 @@ def calculation_inspector(engine):
     with c:
         ui.metric("Excluded records", f"{result.get('excluded_count', 0):,}", "Inspect the reasons below", ui.PURPLE)
     st.write(definition.get("business_purpose", definition.get("purpose", "")))
+    available = result["status"] == "available"
+    if not available and group != UNAVAILABLE:
+        if selected in SCENARIO_PARAMETERS and all(value is None for value in parameters.values()):
+            st.info("Enter the required inputs above to calculate this estimate.")
+        else:
+            st.warning(f"No result yet: {result.get('unavailable_reason') or 'required evidence is unavailable.'}")
     explanation = execute_metric_tool(engine, {"action": "calculate", "metric_id": selected,
                                                "parameters": parameters})
     if explanation["ok"]:
@@ -304,8 +427,16 @@ def calculation_inspector(engine):
             ui.note(explanation["explanation"])
             st.caption("Grounded backend explanation · no external generative AI is connected.")
     st.code(definition.get("formula", "See metric definition"), language="text")
+    worked = worked_formula(selected, result)
+    if worked:
+        st.markdown(f"**With {'your assumptions' if selected in SCENARIO_PARAMETERS else 'this source'}:** `{worked}`")
     st.write(f"**Numerator:** {result.get('numerator', 'Not applicable')} · "
              f"**Denominator:** {result.get('denominator', 'Not applicable')}")
+    if selected in SCENARIO_PARAMETERS:
+        st.dataframe(pd.DataFrame([{"Input": INPUT_SPECS[name].label if name in INPUT_SPECS else name.title(),
+                                    "Value": "—" if parameters.get(name) is None else str(parameters[name]),
+                                    "Origin": inputs.origins[name]} for name in inputs.origins]),
+                     hide_index=True, width="stretch")
     warnings, assumptions = result.get("warnings", []), result.get("assumptions", [])
     if warnings or assumptions:
         with st.expander(f"Data-quality notes and assumptions ({len(warnings) + len(assumptions)})"):
@@ -313,19 +444,28 @@ def calculation_inspector(engine):
                 st.write("• " + str(warning))
             for assumption in assumptions:
                 st.write("Assumption: " + str(assumption))
+    if inputs.evidence_metric:
+        # The denominator the user confirmed is the source's own incident membership.
+        records = engine.inspect(inputs.evidence_metric)["records"]
+    actions = inspector_actions(role, group, engine.context.source_kind, selected, available)
+    st.markdown("**Next step**")
+    evidence_csv = records.to_csv(index=False).encode("utf-8") if available else b""
+    for column, action in zip(st.columns(len(actions)), actions):
+        with column:
+            _render_action(action, evidence_csv, selected)
     evidence_tab, technical_tab = st.tabs(["Contributing and excluded records", "Definition & provenance"])
     with evidence_tab:
         if records.empty:
             st.info("No incident membership table applies to this result. See the calculation inputs and availability status.")
         else:
-            disposition = st.radio("Evidence rows", ["All", "Included", "Excluded"], horizontal=True)
+            if inputs.evidence_metric:
+                st.caption(f"These are the {len(records):,} incident snapshots counted as the denominator.")
+            disposition = st.radio("Evidence rows", ["All", "Included", "Excluded"], horizontal=True, key="inspector_evidence")
             shown = records
             if disposition != "All":
                 shown = records[records.included.eq(disposition == "Included")]
-            st.caption(f"Showing up to 250 of {len(shown):,} evidence rows. The export contains the full selected evidence.")
+            st.caption(f"Showing up to 250 of {len(shown):,} evidence rows. The export contains all {len(records):,} evidence rows.")
             st.dataframe(shown.head(250), hide_index=True, width="stretch")
-            st.download_button("Export calculation evidence ↓", shown.to_csv(index=False).encode("utf-8"),
-                               f"okai_{selected}_evidence.csv", "text/csv", key="inspector_export")
     with technical_tab:
         st.json({"definition": definition, "result": result, "parameters": parameters})
 
