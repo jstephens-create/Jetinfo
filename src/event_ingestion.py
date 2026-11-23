@@ -284,7 +284,7 @@ def _preserve_source(source: Path, storage_root: Path) -> tuple[Path, str]:
             raise ValueError("Preserved source failed its SHA-256 integrity check")
     elif source != destination.resolve():
         # Copying rather than moving leaves the user's original export untouched.
-        temporary = destination.with_suffix(f".{uuid.uuid4().hex}.tmp")
+        temporary = destination.parent / f".{uuid.uuid4().hex}.tmp"
         try:
             shutil.copyfile(source, temporary)
             if _sha256(temporary) != digest:

@@ -15,7 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src import demo, ui
+from src import demo, tutorial, ui
 from src.calculations import (AVAILABLE, NEEDS_INPUTS, SCENARIO_PARAMETERS, UNAVAILABLE,
                               CalculationContext, CalculationEngine, ThresholdConfig,
                               COMPLETENESS_FIELDS)
@@ -36,9 +36,17 @@ GROUP_COLUMN_LABELS = {
 
 
 def navigate(page, metric_id=None):
+    if page == "Calculation Inspector" and metric_id == "demo_sla_attainment":
+        tutorial.inspection_requested("overview")
     st.session_state["page"] = page
     if metric_id is not None:
         st.session_state["inspector_metric"] = metric_id
+        st.session_state.pop("inspector_search", None)
+
+
+def _metric_name(engine, metric_id):
+    return ("Processing time saved and reduction" if metric_id == "time_saved_hours"
+            else engine.registry[metric_id].name)
 
 
 def demo_engine(incidents, runs):
@@ -93,6 +101,8 @@ def source_selector():
     selected = st.selectbox("Analysis source", list(labels),
                             format_func=labels.get, key="analytical_source")
     st.caption("Metrics follow this source. Saved demo reviews use the synthetic queue.")
+    st.button("Import a source", key="source_import", on_click=navigate,
+              args=("Import Desk",), width="stretch")
     return selected
 
 
@@ -119,7 +129,9 @@ def metric_card(engine, metric_id, key, color=ui.INK):
     if result.status != "available":
         note = "Required evidence is unavailable · inspect the reason"
     ui.metric(definition.name, format_value(result), note, color)
-    st.button("Inspect ↗", key=f"inspect_{key}_{metric_id}", help=f"How {definition.name.lower()} is calculated",
+    st.button(f"Explore {definition.name}", key=f"inspect_{key}_{metric_id}",
+              help=f"{definition.business_purpose} See the definition, eligibility and evidence.",
+              type="primary" if metric_id == "demo_sla_attainment" and tutorial.is_current("overview") else "secondary",
               on_click=navigate, args=("Calculation Inspector", metric_id), width="stretch")
     return result
 
@@ -196,7 +208,7 @@ def operational_overview(engine, workspace_id=None):
             st.button("Open demo incident queue →", on_click=navigate,
                       args=("Incident queue",), key="overview_queue")
         with activity_tab:
-            ui.timeline(demo.read_events(workspace_id))
+            ui.timeline(demo.read_events(workspace_id), owner_labels=demo.OWNER_LABELS)
 
 
 def import_desk():
@@ -266,6 +278,7 @@ class ScenarioInputs(NamedTuple):
 def _currency_input(metric_id):
     choice = st.selectbox("Currency · selected by you", [*CURRENCIES, OTHER_CURRENCY], index=None,
                           key=f"currency_{metric_id}", placeholder="Choose a currency",
+                          on_change=tutorial.scenario_changed,
                           format_func=lambda code: f"{code} — {CURRENCIES[code]}" if code in CURRENCIES else code)
     if choice != OTHER_CURRENCY:
         return choice
@@ -289,6 +302,7 @@ def _incident_count_input(engine, metric_id):
     # The dataset ID in the key drops a stale confirmation when the source changes.
     choice = st.radio("Eligible incident count", options, key=f"count_basis_{metric_id}_{engine.context.dataset_id}",
                       index=None if count else 0,
+                      on_change=tutorial.scenario_changed,
                       help="Choose the source count only if the cost you entered covers every incident counted here. "
                            "Events are not incidents: one incident can have many events.")
     if count and choice == options[0]:
@@ -297,7 +311,8 @@ def _incident_count_input(engine, metric_id):
     if choice == manual:
         spec = INPUT_SPECS["incident_count"]
         value = st.number_input(f"{spec.label} · {ASSUMPTION_TAG}", min_value=1, step=1, value=None,
-                                key=f"scenario_{metric_id}_incident_count", placeholder="Required input", help=spec.help)
+                                key=f"scenario_{metric_id}_incident_count", placeholder="Required input", help=spec.help,
+                                on_change=tutorial.scenario_changed)
         return value, ORIGIN_ENTERED, None
     return None, "Not chosen yet", None
 
@@ -309,6 +324,18 @@ def _scenario_parameters(engine, metric_id):
         return ScenarioInputs({}, {})
     st.caption("Values typed here are your assumptions. OKai does not measure or verify them; "
                "they stay labelled as assumptions in the result.")
+    if metric_id == "cost_per_incident":
+        with st.expander("What belongs in eligible operational cost?", expanded=True):
+            st.write("Enter one total for the same incidents and period as your incident count. "
+                     "This metric does not read an operational cost field from the source; this is your allocation, not a measured source value.")
+            st.markdown(
+                "**Possible inclusions:** incident-handling labor, tooling or support costs attributable to those incidents, "
+                "if your cost policy includes them.\n\n"
+                "**Exclude:** costs outside that population or period, unrelated operations, and amounts already counted elsewhere. "
+                "Do not mix currencies. These are examples, not an automatic eligibility determination."
+            )
+            st.caption("Choose and document your own cost categories and allocation method. "
+                       "The app cannot verify the amount, its categories, or a manually entered incident count.")
     parameters, origins, evidence_metric = {}, {}, None
     for name in names:
         if name == "currency":
@@ -322,6 +349,7 @@ def _scenario_parameters(engine, metric_id):
             parameters[name] = st.number_input(
                 f"{spec.label} · {ASSUMPTION_TAG}", help=spec.help, key=f"scenario_{metric_id}_{name}",
                 value=None, placeholder="Required input",
+                on_change=tutorial.scenario_changed,
                 min_value=None if kind == "signed_hours" else (0 if kind == "count" else 0.0),
                 step=1 if kind == "count" else None, format="%.2f" if kind == "money" else None)
             origins[name] = ORIGIN_ENTERED
@@ -336,7 +364,7 @@ def _group_table(engine, group, ids, availability):
             rows.append({"Metric": definition.name, "Source fields used": ", ".join(definition.required_fields),
                          "Counts": definition.unit_of_analysis})
         elif group == NEEDS_INPUTS:
-            rows.append({"Metric": definition.name, "Inputs you provide": ", ".join(
+            rows.append({"Metric": _metric_name(engine, metric_id), "Inputs you provide": ", ".join(
                 INPUT_SPECS[name].label if name in INPUT_SPECS else name.replace("_", " ").title()
                 for name in availability[metric_id].required_inputs)})
         else:
@@ -352,11 +380,14 @@ def _choose_group(groups):
 
 
 def _show_excluded():
+    if st.session_state.get("inspector_metric") == "demo_sla_attainment":
+        tutorial.inspection_requested("inspector")
     st.session_state["inspector_evidence"] = "Excluded"
 
 
 def _render_action(action, evidence_csv, metric_id):
-    kind = "primary" if action.primary else "secondary"
+    kind = "primary" if action.primary or (action.action_id == "excluded"
+                                            and tutorial.is_current("inspector")) else "secondary"
     if action.kind == "hint":
         st.info(f"**Next:** {action.label}")
     elif action.action_id == "export":
@@ -379,7 +410,13 @@ def calculation_inspector(engine, role=None):
     availability = engine.metric_availability()
     groups = {group: [metric_id for metric_id, row in availability.items() if row.group == group]
               for group in GROUP_LABELS}
+    # Both measures use the same inputs; present one scenario without removing either backend contract.
+    for ids in groups.values():
+        if "time_reduction_pct" in ids:
+            ids.remove("time_reduction_pct")
     groups = {group: ids for group, ids in groups.items() if ids}
+    if st.session_state.get("inspector_metric") == "time_reduction_pct":
+        st.session_state["inspector_metric"] = "time_saved_hours"
     if st.session_state.get("inspector_metric") not in availability:
         st.session_state["inspector_metric"] = "unique_incident_count"
     # A source change or a link from another page can move the metric to another group.
@@ -389,8 +426,22 @@ def calculation_inspector(engine, role=None):
              args=(groups,), format_func=lambda key: f"{GROUP_LABELS[key]} ({len(groups[key])})")
     with st.expander(f"Metrics in “{GROUP_LABELS[group]}”", expanded=group == UNAVAILABLE):
         _group_table(engine, group, groups[group], availability)
-    selected = st.selectbox("Metric", groups[group], key="inspector_metric",
-                            format_func=lambda key: engine.registry[key].name)
+    search = st.text_input("Find a metric", key="inspector_search",
+                           placeholder="Search by name, question, field, or keyword")
+    keywords = {"time_saved_hours": "time reduction percent baseline observed processing",
+                "cost_per_incident": "operational cost labor expenses eligible allocation currency"}
+    terms = search.casefold().split()
+    matching = [key for key in groups[group] if all(term in " ".join([
+        _metric_name(engine, key), engine.registry[key].business_purpose,
+        " ".join(engine.registry[key].required_fields), keywords.get(key, "")
+    ]).casefold() for term in terms)]
+    if not matching:
+        st.info("No metrics in this group match those keywords. Try another group or search.")
+        return
+    if st.session_state["inspector_metric"] not in matching:
+        st.session_state["inspector_metric"] = matching[0]
+    selected = st.selectbox("Metric", matching, key="inspector_metric",
+                            format_func=lambda key: _metric_name(engine, key))
     if group == UNAVAILABLE:
         step = next_step(selected, engine.context.source_kind)
         st.warning(f"Unavailable from this source: {availability[selected].reason} {step.note}")
@@ -405,21 +456,47 @@ def calculation_inspector(engine, role=None):
         st.error(str(exc))
         return
     definition, result, records = inspection["definition"], inspection["result"], inspection["records"]
+    if tutorial.inspection_loaded(selected, result, records):
+        st.rerun()
+    if (selected == "cost_per_incident" and result["status"] == "available"
+            and parameters.get("currency") == "USD" and parameters.get("operational_cost") == 1000
+            and parameters.get("incident_count") == 10 and inputs.origins.get("incident_count") == ORIGIN_ENTERED
+            and st.session_state.get("tutorial", {}).get("scenario_touched")
+            and tutorial.observe("scenario")):
+        st.rerun()
+    if (selected == "time_saved_hours" and result["status"] == "available"
+            and parameters.get("baseline_hours") == 10 and parameters.get("observed_hours") == 6
+            and st.session_state.get("tutorial", {}).get("time_touched")
+            and tutorial.observe("time")):
+        st.rerun()
     a, b, c = st.columns([2, 1, 1])
+    population_label = "scenarios" if selected in SCENARIO_PARAMETERS else "records"
     with a:
         ui.metric(definition.get("name", selected), format_value(engine.calculate(selected, parameters=parameters)),
                   result.get("unit", ""), ui.ORANGE)
     with b:
-        ui.metric("Eligible records", f"{result.get('eligible_count', 0):,}", "Backend-defined population", ui.CYAN)
+        ui.metric(f"Eligible {population_label}", f"{result.get('eligible_count', 0):,}", "Backend-defined population", ui.CYAN)
     with c:
-        ui.metric("Excluded records", f"{result.get('excluded_count', 0):,}", "Inspect the reasons below", ui.PURPLE)
+        ui.metric(f"Excluded {population_label}", f"{result.get('excluded_count', 0):,}", "Inspect the reasons below", ui.PURPLE)
     st.write(definition.get("business_purpose", definition.get("purpose", "")))
+    st.markdown("**What this value means**")
+    st.write(f"**Population:** {definition['unit_of_analysis']}  \n"
+             f"**Required fields or inputs:** {', '.join(definition['required_fields'])}  \n"
+             f"**Numerator:** {definition['numerator_definition']}  \n"
+             f"**Denominator:** {definition['denominator_definition']}  \n"
+             f"**Eligibility and exclusions:** {definition['filters_and_exclusions']}  \n"
+             f"**When data is missing:** {definition['missing_data_behavior']}  \n"
+             f"**Window:** {definition['applicable_window']}")
     available = result["status"] == "available"
     if not available and group != UNAVAILABLE:
         if selected in SCENARIO_PARAMETERS and all(value is None for value in parameters.values()):
             st.info("Enter the required inputs above to calculate this estimate.")
         else:
             st.warning(f"No result yet: {result.get('unavailable_reason') or 'required evidence is unavailable.'}")
+    if selected == "total_event_count" and result["status"] != "available":
+        tutorial.question("limits", "Why can't the demo count historical events?",
+                          [tutorial.LIMIT_ANSWER, "Every incident snapshot is one historical event"],
+                          tutorial.LIMIT_ANSWER)
     explanation = execute_metric_tool(engine, {"action": "calculate", "metric_id": selected,
                                                "parameters": parameters})
     if explanation["ok"]:
@@ -430,6 +507,14 @@ def calculation_inspector(engine, role=None):
     worked = worked_formula(selected, result)
     if worked:
         st.markdown(f"**With {'your assumptions' if selected in SCENARIO_PARAMETERS else 'this source'}:** `{worked}`")
+    if selected == "time_saved_hours":
+        reduction = engine.calculate("time_reduction_pct", parameters=parameters)
+        st.write(f"**Processing time reduction:** {format_value(reduction)}")
+        if reduction.status != "available":
+            st.caption(f"Percentage unavailable: {reduction.unavailable_reason}")
+        else:
+            st.caption("The percentage and hours describe the same matched baseline and observed process; negative values mean an increase in time.")
+            st.code(worked_formula("time_reduction_pct", reduction.to_dict()), language="text")
     st.write(f"**Numerator:** {result.get('numerator', 'Not applicable')} · "
              f"**Denominator:** {result.get('denominator', 'Not applicable')}")
     if selected in SCENARIO_PARAMETERS:
@@ -536,7 +621,7 @@ def decision_support(engine):
     st.caption("These are final snapshots, not a point-in-time replay. The review timestamp must be at or after "
                "the latest source observation. The machine's current time is not used to age old exports.")
     with st.form("decision_rules"):
-        as_of = st.text_input("Review as-of timestamp", value=engine.context.observation_end or "",
+        as_of = st.text_input("Review as-of timestamp", value=engine.context.observation_end or "", key="decision_as_of",
                               placeholder="YYYY-MM-DD HH:MM:SS, in the source timestamp zone")
         a, b, c = st.columns(3)
         age = a.number_input("Open incident age threshold (hours)", min_value=0.0, value=48.0)
@@ -554,6 +639,8 @@ def decision_support(engine):
                 raise ValueError(response["error"]["message"])
             st.session_state["decision_evidence"] = {"source": engine.context.dataset_id, "as_of": as_of,
                                                        "response": response}
+            if tutorial.observe("decision"):
+                st.rerun()
         except (ValueError, TypeError) as exc:
             st.error(str(exc))
     evidence = st.session_state.get("decision_evidence")
@@ -596,6 +683,9 @@ def governance(engine):
                 "The launcher binds to localhost. Use anonymized portfolio data.\n\n"
                 "**Value estimates.** Labor capacity value requires explicit inputs and does not establish realized cash savings. "
                 "No external generative AI, ticketing API, or identity provider is connected.")
+    tutorial.question("governance", "What protects access to imported data in this demo?",
+                      [tutorial.GOVERNANCE_ANSWER, "Production authentication isolates each user's imports"],
+                      tutorial.GOVERNANCE_ANSWER)
     with st.expander("Calculation result contract"):
         st.json(engine.calculate("unique_incident_count").to_dict())
     with st.expander("Read-only interpretation tool contract"):

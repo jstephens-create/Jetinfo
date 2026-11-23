@@ -1,4 +1,4 @@
-# OKai — Operational Decision Intelligence
+# OKai — Operational Decision Intelligence*
 
 **Make every metric meaningful.** An interactive portfolio project for entry-level data roles, connecting **Python, SQL, data engineering, and machine learning** to a practical question:
 

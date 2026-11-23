@@ -89,6 +89,14 @@ html, body, [data-testid="stApp"] { font-family: Arial, Helvetica, sans-serif; }
 .feature-number { font-size:.65rem; font-weight:700; color:#e44820; }
 .context-note { background:#ebe9e2; border-left:3px solid var(--orange); padding:13px 17px;
     font-size:.78rem; color:#666158; line-height:1.65; border-radius:0 4px 4px 0; }
+[class*="st-key-tutorial_focus"] { border:1px solid #dfb9a9; border-left:5px solid #d8401b;
+    background:#fffaf7; border-radius:8px; padding:24px;
+    box-shadow:0 4px 16px rgba(35,31,24,.08); }
+[class*="st-key-tutorial_focus"] h2, [class*="st-key-tutorial_focus"] h3 {
+    font-size:1.45rem; line-height:1.25; }
+[class*="st-key-tutorial_focus"] p { font-size:1rem; line-height:1.55; color:#24211f; }
+[class*="st-key-tutorial_focus"] [data-testid="stCaptionContainer"] p {
+    color:#594e47; font-size:.8rem; font-weight:600; }
 /* Every chart_* container gets the same raised edge. The data stays flat and
    readable: the bevel belongs to the card, never to a bar's measured length. */
 [class*="st-key-chart_"] { background:linear-gradient(150deg,#ffffff 0%,#faf9f6 100%);
@@ -129,8 +137,8 @@ html, body, [data-testid="stApp"] { font-family: Arial, Helvetica, sans-serif; }
     letter-spacing:.1em; text-transform:uppercase; }
 .brand-name { text-transform:none; }
 h1, h2, h3 { letter-spacing:-.04em !important; }
-[data-testid="stCaptionContainer"] { font-size:.73rem; color:#817a6e; }
-[data-testid="stCaptionContainer"] p { font-size:.73rem; color:#817a6e; line-height:1.6; }
+[data-testid="stCaptionContainer"] { font-size:.8rem; color:#625e56; }
+[data-testid="stCaptionContainer"] p { font-size:.8rem; color:#625e56; line-height:1.55; }
 [data-testid="stBaseButton-primary"] { background:var(--orange); color:#171717;
     border:1px solid var(--orange); font-weight:600; border-radius:4px; }
 [data-testid="stBaseButton-primary"]:hover { background:#ed4721; color:#111; border-color:#ed4721; }
@@ -159,6 +167,9 @@ h1, h2, h3 { letter-spacing:-.04em !important; }
     .masthead-right > span:first-child { display:none; }
     .metric-value { font-size:2rem; }
     .project-footer { gap:15px; font-size:.5rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .okai-brand, .metric-card--link { transition:none; }
 }
 </style>
 """
@@ -255,6 +266,9 @@ def note(text):
 
 def risk_pill(level):
     level = str(level)
+    if level.strip().casefold() in {"none", "nan", "<na>", ""}:
+        st.html(f'<span class="risk-pill" style="color:{MUTED}">RISK UNAVAILABLE</span>')
+        return
     color = RISK_COLORS.get(level, MUTED)
     st.html(f'<span class="risk-pill" style="color:{color}">'
             f'<span class="risk-dot"></span>{escape(level.upper())} RISK</span>')
@@ -302,20 +316,22 @@ def bar(df, x, y, title, hover="%{y}: %{x:.1f}<extra></extra>", color=ORANGE):
     return style(fig)
 
 
-def timeline(events, limit=6):
+def timeline(events, limit=6, owner_labels=None):
     if events.empty:
         st.html('<div class="empty-state">Your workspace starts with a clean slate.<br>'
                 'Review an incident or add a note to start the activity timeline.</div>')
         return
     labels = {"assigned_team": "Team", "owner": "Owner", "review_state": "Review"}
+    owner_labels = owner_labels or {}
     for event in events.head(limit).to_dict("records"):
         before, after = json.loads(event["before_json"]), json.loads(event["after_json"])
-        changes = [f'{labels[key]}: {before.get(key, "—")} → {value}'
+        changes = [f'{labels[key]}: {owner_labels.get(before.get(key), before.get(key, "—")) if key == "owner" else before.get(key, "—")} '
+                   f'→ {owner_labels.get(value, value) if key == "owner" else value}'
                    for key, value in after.items() if before.get(key) != value]
         summary = " · ".join(changes) if changes else "Added a note"
         note_html = f'<p>{escape(event["note"])}</p>' if event["note"] else ""
         st.html(f'<div class="timeline-item"><div class="timeline-top">'
-                f'<strong>{escape(event["actor"])} · {escape(event["incident_id"])}</strong>'
+                f'<strong>{escape(owner_labels.get(event["actor"], event["actor"]))} · {escape(event["incident_id"])}</strong>'
                 f'<span>{escape(event["happened_at"])} UTC</span></div>'
                 f'<p>{escape(summary)}</p>{note_html}</div>')
 

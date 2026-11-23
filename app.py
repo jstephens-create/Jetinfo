@@ -10,11 +10,11 @@ from uuid import uuid4
 import joblib
 import streamlit as st
 
-from src import database, demo, ui, views, intelligence_views
+from src import database, demo, ui, views, intelligence_views, tutorial
 from src.config import DB_PATH, METRICS_PATH, MODEL_PATH
 
-PAGES = ["Overview", "Incident queue", "Import Desk", "Calculation Inspector",
-         "Decision Support", "Data quality", "Risk lab", "Project notes", "Settings & Governance"]
+PAGES = ["Overview", "Incident queue", "Calculation Inspector", "Decision Support",
+         "Data quality", "Risk lab", "Project notes", "Settings & Governance", "Import Desk"]
 LANDING = {"Analyst": "Incident queue", "Manager": "Overview", "Admin": "Data quality"}
 # Landing cards can open these three demo views directly. An allowlist keeps
 # query parameters from choosing arbitrary pages or pretending to be real auth.
@@ -47,6 +47,18 @@ def enter_workspace():
     role = st.session_state["login_role"]
     st.session_state["persona_role"] = role
     st.session_state["page"] = LANDING[role]
+
+
+def enter_guided_demo():
+    enter_workspace()
+    tutorial.start(st.session_state["persona_role"])
+
+
+def enter_import():
+    enter_workspace()
+    st.session_state["page"] = "Import Desk"
+    if "tutorial" in st.session_state:
+        st.session_state["tutorial"]["paused"] = True
 
 
 def change_role():
@@ -91,11 +103,14 @@ def login(incidents, metrics, runs):
             st.markdown("### Explore OKai.")
             st.caption("Start as an analyst, manager, or admin. Each persona opens a different view.")
             st.selectbox("Demo persona", list(demo.PROFILES), key="login_role",
-                         format_func=lambda name: f"{name} — {demo.PROFILES[name]['name']}")
+                         format_func=lambda role: f"{role} — {demo.owner_label(demo.PROFILES[role]['name'])}")
             st.caption("Analyst → review queue · Manager → overview · Admin → data quality")
             st.form_submit_button("Open workspace →", type="primary", width="stretch", on_click=enter_workspace)
+            st.form_submit_button("Start guided demo", width="stretch", on_click=enter_guided_demo)
+            st.form_submit_button("Import a CSV", width="stretch", on_click=enter_import)
         st.caption("Mock login · Fictional identities · Synthetic incident data. "
                    "Workspace changes are saved locally and survive a page refresh.")
+        st.caption("CSV import currently supports the UCI Incident Management event-log profile.")
     a, b, c = st.columns(3)
     with a:
         ui.feature("01 / CLEAN", "Start with better inputs.",
@@ -113,7 +128,8 @@ def sidebar(workspace_id):
     with st.sidebar:
         st.html(ui.brand_html(sidebar=True) + '<div class="brand-caption">OPERATIONAL DECISION INTELLIGENCE</div>')
         st.divider()
-        st.selectbox("Demo persona", list(demo.PROFILES), key="persona_role", on_change=change_role)
+        st.selectbox("Demo persona", list(demo.PROFILES), key="persona_role", on_change=change_role,
+                     format_func=lambda role: f"{role} — {demo.owner_label(demo.PROFILES[role]['name'])}")
         role = st.session_state["persona_role"]
         profile = demo.PROFILES[role]
         st.html(f'<div class="persona"><div class="avatar">{profile["initials"]}</div>'
@@ -122,12 +138,10 @@ def sidebar(workspace_id):
         st.radio("Workspace", PAGES, key="page", label_visibility="collapsed")
         st.divider()
         source_id = intelligence_views.source_selector()
+        tutorial.navigation_observed()
         st.divider()
-        with st.expander("Make the most of the demo"):
-            st.caption("1. Review an open incident and save a note.\n\n"
-                       "2. Switch to Manager to see the updated workload.\n\n"
-                       "3. Import a historical event log in Import Desk.\n\n"
-                       "4. Follow any KPI to its Calculation Inspector.")
+        tutorial.sidebar(role, source_id)
+        st.divider()
         if role == "Admin":
             st.button("Reset demo workspace", key="admin_reset_sidebar", on_click=reset_demo,
                       args=(workspace_id,), width="stretch")
@@ -140,7 +154,7 @@ def sidebar(workspace_id):
 def main():
     """Prepare shared inputs once per rerun, then render the selected view."""
     st.set_page_config(page_title="OKai — Operational Decision Intelligence", page_icon="◉", layout="wide",
-                       initial_sidebar_state="expanded")
+                       initial_sidebar_state="auto")
     ui.inject_styles()
     if not DB_PATH.exists():
         ui.masthead()
@@ -152,7 +166,11 @@ def main():
     if incidents.empty:
         st.info("The incident dataset is empty. Run python -m src.etl to prepare it.")
         st.stop()
-    metrics = json.loads(METRICS_PATH.read_text(encoding="utf-8")) if METRICS_PATH.exists() else None
+    try:
+        metrics = json.loads(METRICS_PATH.read_text(encoding="utf-8")) if METRICS_PATH.exists() else None
+    except (OSError, ValueError):
+        metrics = None
+        st.warning("The demo model metrics could not be read. Other workspace features remain available.")
     shortcut = st.query_params.get("open", "")
     if shortcut in SHORTCUTS:
         st.session_state["persona_role"], st.session_state["page"] = SHORTCUTS[shortcut]
@@ -171,6 +189,12 @@ def main():
     demo.ensure_workspace(workspace_id)
     role, source_id = sidebar(workspace_id)
     ui.masthead()
+    tutorial.focus()
+    if (tutorial.active(role, source_id, st.session_state["page"])
+            and st.session_state["tutorial"]["order"][st.session_state["tutorial"]["index"]] == "orientation"
+            and not st.session_state["tutorial"]["verified"]):
+        ui.footer()
+        return
     # A save callback can leave a one-use message for the next render. pop()
     # displays it once, so later filter changes do not repeat a stale success.
     if message := st.session_state.pop("flash", None):
@@ -180,7 +204,12 @@ def main():
         import_metadata = None
     else:
         engine, import_metadata = intelligence_views.imported_engine(source_id)
-    model = load_model(MODEL_PATH.stat().st_mtime_ns) if source_id == "demo" and MODEL_PATH.exists() else None
+    model = None
+    if source_id == "demo" and st.session_state["page"] in {"Incident queue", "Risk lab"} and MODEL_PATH.exists():
+        try:
+            model = load_model(MODEL_PATH.stat().st_mtime_ns)
+        except Exception as exc:
+            st.warning(f"The demo model could not be loaded: {exc}. Other workspace features remain available.")
     # Page functions own presentation; database/demo own SQL and persistence.
     # Keeping these responsibilities separate makes each part easier to inspect.
     page = st.session_state["page"]

@@ -19,7 +19,13 @@ PROFILES = {
     "Admin": {"name": "Casey Brooks", "title": "Data administrator", "initials": "CB"},
 }
 OWNERS = ["Unassigned"] + [profile["name"] for profile in PROFILES.values()]
+OWNER_LABELS = {profile["name"]: f"{profile['name']} — {profile['title']} (mock)"
+                for profile in PROFILES.values()}
 REVIEW_STATES = ["Unreviewed", "In review", "Escalated", "Monitoring"]
+
+
+def owner_label(name):
+    return OWNER_LABELS.get(name, name)
 
 # The composite review key allows one review per incident *per workspace*. Events
 # reference that same pair, so resetting reviews can also remove their history.

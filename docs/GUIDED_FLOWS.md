@@ -4,6 +4,64 @@ Personas are a mock sign-in (no real identity provider). Each flow is
 **Role → Goal → Available actions → Required inputs → Result and evidence**.
 Status: **Implemented** = in the app now; **Proposed** = design only.
 
+## Guided synthetic missions
+
+Select **Start guided demo** at sign-in or in the sidebar. The orientation
+introduces the selected role and asks the user to open **Incident queue** using
+the main button or sidebar navigation. Only reaching that view unlocks Next.
+Select **Continue to next mission** to move from step 0 to the role-specific
+first mission. The guide explains a locked Next button beside the action and
+in the sidebar.
+
+The Analyst starts with a handover, the Manager with service-level analysis,
+and the Admin with data quality. The journeys then connect the overview, metric evidence and
+limitations, hypothetical cost and time estimates, incident handover, investigation
+rules, data quality, the risk lab, and governance. Highlighted instructions explain the
+key moment on each page and place each mission in the source-to-action architecture.
+The next mission unlocks only after the relevant action succeeds or the correct
+answer is selected. Handover requires a saved review, scenarios require the
+specified inputs, and the risk checkpoint requires a successful score and
+explanation after a priority change. The checks verify those interactions, not
+that the user understood or read every screen. Users can review the result,
+go back, skip, pause, restart, or exit. Revisited completed missions remain
+verified; skipped missions are reported separately. Progress is session-only;
+saved review changes remain in the demo workspace.
+
+The focus panel presents the architectural layer and key moment. An outline
+marks the current control or form, while unrelated charts and tables are
+subtly dimmed without blocking interaction. This is not a full-screen overlay
+or browser zoom. Chart/table opacity returns on hover or keyboard focus and
+when the user requests higher contrast; reduced-motion settings disable
+decorative transitions. These measures are not a full accessibility audit.
+If the user visits another page, the guide offers a route back without clearing
+verified progress. For a handover, the form submits all fields together; an
+incomplete save identifies the missing owner, review state, or note. Clear
+queue filters if no matching incident is visible, or skip if the synthetic
+queue is empty. A completed journey shows verified and skipped steps separately.
+
+The tour uses only the synthetic source. Importing is a separate entry point;
+switching to an imported source or opening Import Desk pauses the tour without
+changing the selected import. Back navigation is disabled there; resuming or
+restarting explicitly switches back to the demo.
+CSV import currently supports the UCI Incident Management event-log profile,
+not arbitrary CSV schemas. The data quality and risk missions can be skipped
+when the pipeline run or model is unavailable.
+
+Mock names and positions are presentation labels. The saved owner identifiers
+and audit data remain unchanged. After updating Python modules, restart the
+Streamlit process rather than only refreshing the browser: a running process
+may retain previously imported modules even when `app.py` reruns. Stop the
+running OKai server with Ctrl+C in its terminal, then launch it from the project
+root:
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.address 127.0.0.1 --server.port 8501
+```
+
+Confirm the server is ready at `http://localhost:8501`. Restarting clears
+browser-session tutorial progress but does not reset saved demo reviews or
+imported data.
+
 ## Persona flows
 
 | Role | Goal | Available actions | Required inputs | Result and evidence |

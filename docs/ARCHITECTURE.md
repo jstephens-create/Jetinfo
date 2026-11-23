@@ -99,6 +99,34 @@ committed source namespace remains unchanged.
 
 An unknown source timezone stays explicit and source-local. A confirmed named zone is strictly localized and normalized to UTC; invalid/DST-ambiguous core event times are rejected, while invalid optional values become unknown with retained warnings. Financial and efficiency metrics require explicit matched-scope scenario inputs. A read-only tool is a future AI integration seam, not a claim that an AI service is connected or that the interface itself performs user authorization.
 
+## Guided demo and session state
+
+`app.py` selects the mock persona and analysis source and dispatches pages.
+`src/tutorial.py` stores mission order, checkpoints and navigation in
+Streamlit session state; it does not persist tutorial progress. The guide
+uses only synthetic data. Changing to an import pauses the guide, and an
+explicit resume or restart returns to the synthetic source. Completed and
+skipped checkpoints are distinguished; successful saves and calculations,
+not merely button clicks, unlock their corresponding missions.
+
+Each journey begins with orientation and confirms that the incident queue was
+opened before allowing the user to continue. Role-specific mission orders then
+link handover, source quality, metrics, evidence, risk, investigation and
+assumption-based scenarios. UI callbacks record an inspection request, but the
+overview and evidence checkpoints are verified only after the relevant
+calculation and evidence load successfully. The guide provides recovery
+instructions, back/skip/restart/exit controls, and a final verified/skipped
+summary; it never treats a skipped step as verified. Focus outlines use
+Streamlit keyed containers with an explicit text/button fallback, so guidance
+does not depend on visual highlighting alone.
+
+Review assignments and audit events remain workspace-scoped demo overlays
+in the demo database, separate from incident facts and imported records.
+Mock names and positions are display labels, not new persisted identifiers.
+Metrics and their evidence continue to come from the calculation engine.
+Risk estimates use the synthetic model only; missing scores remain unavailable,
+and scenario costs and time savings depend on user-supplied assumptions.
+
 ## Deployment and next boundaries
 
 One Python application and a local SQLite database are appropriate for this portfolio scope. Streamlit calls ordinary backend functions; the calculation engine is not a separate microservice. SQLite supports multiple readers and serialized writes, but no workload/concurrency guarantee has been established here.

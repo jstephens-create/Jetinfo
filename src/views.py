@@ -1,10 +1,11 @@
 """Dashboard pages: SQL analytics, an editable demo queue, and inspectable evidence."""
+import math
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from src import charts, database, demo, quality, ui
+from src import charts, database, demo, quality, tutorial, ui
 from src.config import CATEGORIES, PRIORITIES, RISK_BANDS, risk_level
 from src.train_model import explain, predict
 
@@ -41,7 +42,10 @@ def _open_queue(incidents, workspace_id, role, model):
     with a:
         ui.metric("Open incidents", len(queue), "Outcome is still unknown")
     with b:
-        ui.metric("High risk", int(queue.risk_level.eq("High").sum()), "Creation-time model estimates", ui.ORANGE)
+        scored = int(queue.risk_level.notna().sum())
+        note = (f"Creation-time estimates · {len(queue) - scored} unscored" if scored
+                else "No creation-time scores available")
+        ui.metric("High risk", int(queue.risk_level.eq("High").sum()) if scored else "Unavailable", note, ui.ORANGE)
     with c:
         ui.metric("Reviewed", int(queue.review_state.ne("Unreviewed").sum()), "Saved in this workspace", ui.PURPLE)
     with d:
@@ -61,10 +65,11 @@ def _open_queue(incidents, workspace_id, role, model):
         view = view[view.risk_level.eq(band)]
     if state != "All review states":
         view = view[view.review_state.eq(state)]
-    st.caption(f"{len(view)} of {len(queue)} open incidents · ordered by estimated breach risk")
+    st.caption(f"{len(view)} of {len(queue)} open incidents · ordered by estimated breach risk where available")
     columns = ["incident_id", "priority", "affected_service", "assigned_team", "breach_probability",
                "review_state", "owner"]
     display = view[columns].copy()
+    display["owner"] = display["owner"].map(demo.owner_label)
     # Stored probabilities stay in [0, 1] for ML. Only the presentation copy is
     # multiplied by 100, avoiding accidental double conversion in later scoring.
     display["breach_probability"] = (display["breach_probability"] * 100).round(1)
@@ -77,10 +82,17 @@ def _open_queue(incidents, workspace_id, role, model):
                        "okai_open_incidents.csv", "text/csv", key="queue_export")
     if view.empty:
         ui.note("No incidents match these filters. Clear the search or choose all risk bands and review states.")
+        if tutorial.is_current("queue"):
+            st.info("The handover needs an open incident. Clear the filters above or use Skip mission in the guide.")
         return
 
     ui.section("FROM INSIGHT TO ACTION", "Take a closer look.",
                "Review an incident, assign its next owner, and leave a clear handover.")
+    if tutorial.is_current("queue") and not st.session_state["tutorial"]["verified"]:
+        st.info("Guide: choose an incident, select an owner, set the review state to In review, "
+                "write a handover note, and select Save review. All four are needed to unlock Next.")
+        if feedback := st.session_state.pop("tutorial_queue_feedback", None):
+            st.warning(feedback)
     ids = view.incident_id.tolist()
     if st.session_state.get("review_incident") not in ids:
         st.session_state.pop("review_incident", None)
@@ -114,7 +126,8 @@ def _open_queue(incidents, workspace_id, role, model):
                                 key=f"review_team_{chosen}")
             left, right = st.columns(2)
             owner = left.selectbox("Owner", demo.OWNERS, index=demo.OWNERS.index(incident["owner"]),
-                                   key=f"review_owner_{chosen}")
+                                   key=f"review_owner_{chosen}",
+                                   format_func=demo.owner_label)
             review_state = right.selectbox("Review state", demo.REVIEW_STATES,
                                             index=demo.REVIEW_STATES.index(incident["review_state"]),
                                             key=f"review_status_{chosen}")
@@ -128,12 +141,25 @@ def _open_queue(incidents, workspace_id, role, model):
                 st.error(str(exc))
             else:
                 st.session_state["flash"] = "Review saved. The team workload and activity timeline are up to date." if saved else "Everything is already up to date."
+                if saved and owner != "Unassigned" and review_state != "Unreviewed" and note.strip():
+                    tutorial.observe("queue")
+                elif tutorial.is_current("queue"):
+                    missing = []
+                    if owner == "Unassigned":
+                        missing.append("choose an owner")
+                    if review_state == "Unreviewed":
+                        missing.append("choose a review state other than Unreviewed")
+                    if not note.strip():
+                        missing.append("write a handover note")
+                    st.session_state["tutorial_queue_feedback"] = (
+                        "Next is still locked: " + "; ".join(missing) + ", then save the review."
+                        if missing else "The review was not saved. Change the review or add a note, then save.")
                 # The queue above was read before the save. A fresh pass reads
                 # the committed values and displays a consistent workload/timeline.
                 st.rerun()
     with activity:
         ui.section("THE HANDOVER", "Incident activity.")
-        ui.timeline(demo.read_events(workspace_id, chosen))
+        ui.timeline(demo.read_events(workspace_id, chosen), owner_labels=demo.OWNER_LABELS)
 
 
 def _archive(incidents):
@@ -188,7 +214,8 @@ def risk_lab(incidents, model, metrics):
     with score_tab:
         ui.section("WHAT IF?", "Change the context. See the estimate.")
         a, b, c = st.columns(3)
-        priority = a.selectbox("Priority", PRIORITIES, index=1, key="score_priority")
+        priority = a.selectbox("Priority", PRIORITIES, index=1, key="score_priority",
+                               on_change=tutorial.risk_changed)
         category = a.selectbox("Category", CATEGORIES, key="score_category")
         services = sorted(incidents[incidents.category.eq(category)].affected_service.unique())
         service = b.selectbox("Affected service", services, key="score_service")
@@ -197,7 +224,16 @@ def risk_lab(incidents, model, metrics):
         hour = c.slider("Created at hour", 0, 23, 10, key="score_hour")
         new = pd.DataFrame([dict(priority=priority, category=category, affected_service=service,
                                  assignment_group=group, created_at=f"{date} {hour:02d}:00:00")])
-        probability = float(predict(model, new)[0])
+        try:
+            probability = float(predict(model, new)[0])
+            if not math.isfinite(probability) or not 0 <= probability <= 1:
+                raise ValueError("The model returned an invalid probability.")
+            contributions = explain(model, new).head(8).iloc[::-1]
+        except Exception as exc:
+            st.error(f"Risk calculation could not be completed: {exc}")
+            return
+        if tutorial.risk_scored():
+            st.rerun()
         left, right = st.columns([1, 2])
         with left:
             ui.metric("Estimated breach risk", f"{probability:.0%}", "At incident creation", ui.ORANGE)
@@ -205,7 +241,6 @@ def risk_lab(incidents, model, metrics):
             st.caption(" · ".join(f"{label}: {low:.0%}–{min(high, 1):.0%}"
                                   for low, high, label in RISK_BANDS))
         with right:
-            contributions = explain(model, new).head(8).iloc[::-1]
             fig = go.Figure(go.Bar(x=contributions.contribution, y=contributions.feature, orientation="h",
                                    marker_color=[ui.ORANGE if x > 0 else ui.PURPLE for x in contributions.contribution],
                                    hovertemplate="%{y}: %{x:+.2f} log-odds<extra></extra>"))
@@ -310,6 +345,8 @@ def data_quality(runs, workspace_id, role):
     ui.note(f"Row balance: {report.loaded_rows:,} loaded + {report.duplicate_rows:,} duplicates + "
             f"{report.invalid_rows:,} invalid = {report.source_rows:,} source rows. "
             f"The {report.duplicate_rows + report.invalid_rows:,} excluded rows already include duplicates.")
+    tutorial.question("quality", "Which outcomes add up to all source rows?",
+                      [tutorial.QUALITY_ANSWER, "Only loaded and invalid source rows"], tutorial.QUALITY_ANSWER)
 
     left, right = st.columns(2, gap="large")
     with left:

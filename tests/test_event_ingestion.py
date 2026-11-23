@@ -62,6 +62,21 @@ def test_history_is_preserved_and_latest_is_a_whole_row(tmp_path):
     assert event_count(result.import_id, db) == 3
 
 
+def test_preserved_source_uses_short_atomic_temporary_name(tmp_path, monkeypatch):
+    source = tmp_path / "input.csv"
+    source.write_bytes(b"example")
+    original_copy = event_ingestion.shutil.copyfile
+    temporary_names = []
+    def capture_copy(src, dst):
+        temporary_names.append(dst.name)
+        return original_copy(src, dst)
+    monkeypatch.setattr(event_ingestion.shutil, "copyfile", capture_copy)
+    destination, digest = event_ingestion._preserve_source(source, tmp_path / "storage")
+    assert destination.read_bytes() == b"example"
+    assert digest == hashlib.sha256(b"example").hexdigest()
+    assert len(temporary_names[0]) < len(destination.name)
+
+
 def test_counter_then_source_row_break_equal_time_ties(tmp_path):
     result, db, _ = load(tmp_path,
         event(sys_mod_count="9", assignment_group="Counter 9"),

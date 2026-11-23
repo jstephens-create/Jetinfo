@@ -49,7 +49,7 @@ INPUT_SPECS = {
     "hourly_labor_cost": InputSpec("Hourly labor cost", "Fully loaded cost of one labor hour, in the currency chosen below.", "money"),
     "processed_records": InputSpec("Processed records", "Whole records the named stage finished successfully.", "count"),
     "elapsed_seconds": InputSpec("Elapsed seconds", "Measured duration of that stage; must be above zero.", "hours"),
-    "operational_cost": InputSpec("Eligible operational cost", "Total cost of the work you want to divide across incidents, in the currency chosen below.", "money"),
+    "operational_cost": InputSpec("Eligible operational cost", "Total of the costs you choose to allocate to the matching incident population and period, in the selected currency. This is not read from the source.", "money"),
     "incident_count": InputSpec("Eligible incident count", "Whole number of incidents the cost covers.", "count"),
 }
 ASSUMPTION_TAG = "your assumption"

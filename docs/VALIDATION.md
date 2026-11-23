@@ -2,6 +2,24 @@
 
 This file separates verified behavior, measured local performance, and remaining limits. **The final combined suite completed with 124 tests passed in 31.44 seconds**, with the supplied real CSV enabled and **no skipped tests or warnings**. These results establish the tested local behavior, not business savings, formal standards certification, or organizational deployment readiness.
 
+## Guided workflow reconstruction
+
+A later local run used a fresh pytest temporary directory:
+`.\.venv\Scripts\python.exe -m pytest -q --tb=short "--basetemp=$base"`.
+It completed with **169 passed, 1 skipped**; the optional real UCI-file test
+was not enabled. After a subsequent responsive-sidebar and wording adjustment,
+`.\.venv\Scripts\python.exe -m pytest tests\test_app_workflows.py -q --tb=short "--basetemp=$base"`
+completed with **22 passed**, again using a fresh temporary directory.
+
+An isolated Streamlit instance with freshly generated synthetic data was
+exercised in headless Edge. All three persona journeys completed their
+orientation and ten operational missions, including handover, calculation
+evidence, risk and decision checkpoints. Back, restart, exit and wrong-page
+recovery were exercised. Orientation was visually inspected at 1440, 1024 and
+390 pixels; those views had no document or guidance-panel horizontal overflow,
+and keyboard activation and reduced-motion behavior were checked. This is not
+an exhaustive responsive or accessibility audit of every page and state.
+
 ## Baseline checkpoint
 
 On 2026-11-21, before calculation-engine and event-ingestion changes, the existing suite completed with **46 tests passed**. It covered synthetic ETL, SQLite writes and denominators, model inputs, demo review/reset isolation, and quality report/chart semantics.
@@ -134,8 +152,8 @@ Use the [launcher](../run.ps1) or existing VS Code task for the interactive app.
 The full-file test is opt-in so a normal checkout does not require a local third-party download. Point it at the supplied CSV to independently compare application results with a standard-library reference:
 
 ```powershell
-$env:OKAI_UCI_CSV = 'C:\Users\jstep\Downloads\incident+management+process+enriched+event+log\incident_event_log.csv'
-.\.venv\Scripts\python.exe -m pytest tests/test_event_ingestion.py -q
+$env:OKAI_UCI_CSV = 'C:\path\to\incident_event_log.csv'
+.\.venv\Scripts\python.exe -m pytest tests\test_event_ingestion.py -q
 # All formulas, ingestion, application workflows, and existing regressions:
 .\.venv\Scripts\python.exe -m pytest
 ```
