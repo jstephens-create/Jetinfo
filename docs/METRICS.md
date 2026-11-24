@@ -86,6 +86,12 @@ evidence retains `incident_id`, `source_row`, and `event_id` when provided, plus
 - `numerator_member`: membership in a rate/count numerator where relevant;
 - `contribution_value`: duration hours where relevant.
 
+The Calculation Inspector's JSON trace export packages the metric definition,
+result (including unavailable reasons), source/import context, parameter values
+and origins, and every evidence row. If a scenario denominator is confirmed
+against the source, the supporting incident rows are included separately from
+the scenario's result row. The existing CSV evidence export remains available.
+
 For completeness, a missing field value still belongs to the denominator.
 Consequently its `included` is true and its `numerator_member` is false. This is
 intentional: excluding missing assignments from the denominator would manufacture

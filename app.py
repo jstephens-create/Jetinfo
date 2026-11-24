@@ -13,7 +13,7 @@ import streamlit as st
 from src import database, demo, ui, views, intelligence_views, tutorial
 from src.config import DB_PATH, METRICS_PATH, MODEL_PATH
 
-PAGES = ["Overview", "Incident queue", "Calculation Inspector", "Decision Support",
+PAGES = ["Overview", "Incident queue", "Calculation Inspector", "Investigations", "Decision Support",
          "Data quality", "Risk lab", "Project notes", "Settings & Governance", "Import Desk"]
 LANDING = {"Analyst": "Incident queue", "Manager": "Overview", "Admin": "Data quality"}
 # Landing cards can open these three demo views directly. An allowlist keeps
@@ -237,6 +237,8 @@ def main():
         intelligence_views.import_desk()
     elif page == "Calculation Inspector":
         intelligence_views.calculation_inspector(engine, role)
+    elif page == "Investigations":
+        intelligence_views.investigation_workbench(engine, role)
     elif page == "Decision Support":
         intelligence_views.decision_support(engine)
     elif page == "Settings & Governance":

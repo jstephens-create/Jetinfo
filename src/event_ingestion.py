@@ -18,7 +18,7 @@ import sqlite3
 import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -42,6 +42,7 @@ EVENT_COLUMNS = [
 TIMESTAMP_FIELDS = ("event_at", "opened_at", "resolved_at", "closed_at")
 INTEGER_FIELDS = ("source_sequence", "reassignment_count", "reopen_count")
 BOOLEAN_FIELDS = ("source_sla_met", "is_active")
+ATTEMPT_STALE_AFTER = timedelta(hours=1)
 
 
 @dataclass(frozen=True)
@@ -147,9 +148,9 @@ CREATE INDEX IF NOT EXISTS source_import_attempt_lookup
 CREATE TABLE IF NOT EXISTS source_events (
     import_id TEXT NOT NULL REFERENCES source_imports(import_id),
     incident_id TEXT NOT NULL,
-    source_row INTEGER NOT NULL,
+    source_row INTEGER NOT NULL CHECK (source_row > 0),
     event_at TEXT NOT NULL,
-    source_sequence INTEGER,
+    source_sequence INTEGER CHECK (source_sequence IS NULL OR source_sequence >= 0),
     opened_at TEXT,
     resolved_at TEXT,
     closed_at TEXT,
@@ -160,15 +161,37 @@ CREATE TABLE IF NOT EXISTS source_events (
     assigned_to TEXT,
     source_sla_met INTEGER CHECK(source_sla_met IN (0, 1) OR source_sla_met IS NULL),
     is_active INTEGER CHECK(is_active IN (0, 1) OR is_active IS NULL),
-    reassignment_count INTEGER,
-    reopen_count INTEGER,
+    reassignment_count INTEGER CHECK (reassignment_count IS NULL OR reassignment_count >= 0),
+    reopen_count INTEGER CHECK (reopen_count IS NULL OR reopen_count >= 0),
     timestamp_timezone TEXT NOT NULL,
-    resolved_after_event INTEGER,
-    closed_after_event INTEGER,
+    resolved_after_event INTEGER CHECK (resolved_after_event IN (0, 1) OR resolved_after_event IS NULL),
+    closed_after_event INTEGER CHECK (closed_after_event IN (0, 1) OR closed_after_event IS NULL),
     validation_warnings TEXT NOT NULL,
     raw_record_json TEXT NOT NULL,
     PRIMARY KEY(import_id, source_row)
 );
+CREATE TRIGGER IF NOT EXISTS source_events_integrity_insert
+BEFORE INSERT ON source_events
+WHEN NEW.source_row <= 0
+  OR (NEW.source_sequence IS NOT NULL AND NEW.source_sequence < 0)
+  OR (NEW.reassignment_count IS NOT NULL AND NEW.reassignment_count < 0)
+  OR (NEW.reopen_count IS NOT NULL AND NEW.reopen_count < 0)
+  OR (NEW.resolved_after_event IS NOT NULL AND NEW.resolved_after_event NOT IN (0, 1))
+  OR (NEW.closed_after_event IS NOT NULL AND NEW.closed_after_event NOT IN (0, 1))
+BEGIN
+    SELECT RAISE(ABORT, 'Source event values violate ingestion constraints.');
+END;
+CREATE TRIGGER IF NOT EXISTS source_events_integrity_update
+BEFORE UPDATE ON source_events
+WHEN NEW.source_row <= 0
+  OR (NEW.source_sequence IS NOT NULL AND NEW.source_sequence < 0)
+  OR (NEW.reassignment_count IS NOT NULL AND NEW.reassignment_count < 0)
+  OR (NEW.reopen_count IS NOT NULL AND NEW.reopen_count < 0)
+  OR (NEW.resolved_after_event IS NOT NULL AND NEW.resolved_after_event NOT IN (0, 1))
+  OR (NEW.closed_after_event IS NOT NULL AND NEW.closed_after_event NOT IN (0, 1))
+BEGIN
+    SELECT RAISE(ABORT, 'Source event values violate ingestion constraints.');
+END;
 CREATE INDEX IF NOT EXISTS source_event_incident
     ON source_events(import_id, incident_id, event_at, source_sequence, source_row);
 CREATE INDEX IF NOT EXISTS source_event_timeline
@@ -203,7 +226,7 @@ def init_import_db(db_path: Path | str = IMPORT_DB_PATH) -> None:
 
 def _attempt_lookup(conn: sqlite3.Connection, digest: str, profile_fingerprint: str):
     return conn.execute(
-        """SELECT attempt_id, import_id, status
+        """SELECT attempt_id, import_id, status, started_at
            FROM source_import_attempts
            WHERE source_sha256=? AND profile_fingerprint=?
            ORDER BY rowid DESC LIMIT 1""",
@@ -226,13 +249,27 @@ def _start_attempt(db_path: Path | str, digest: str, profile_fingerprint: str) -
     """Create or recover an import attempt in SQLite without touching source facts."""
     attempt_id = uuid.uuid4().hex
     with connect(db_path) as conn:
+        # Serialize the check-and-create step across Streamlit sessions/processes.
+        conn.execute("BEGIN IMMEDIATE")
         prior = _attempt_lookup(conn, digest, profile_fingerprint)
-        if prior and prior[2] not in {"committed", "failed"}:
-            conn.execute(
-                """UPDATE source_import_attempts
-                   SET status='interrupted', stage=stage, finished_at=?, error_message=? 
-                   WHERE attempt_id=?""",
-                (_now(), "Superseded by a retry; the prior process did not complete.", prior[0]),
+        if prior and prior[2] not in {"committed", "failed", "interrupted"}:
+            try:
+                started_at = datetime.fromisoformat(prior[3])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "An existing import attempt has an invalid start time; inspect its history before retrying."
+                ) from exc
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - started_at
+            if age < ATTEMPT_STALE_AFTER:
+                raise ValueError(
+                    "An identical source and mapping import is already in progress. "
+                    "Wait for it to finish, then retry."
+                )
+            _mark_attempt(
+                conn, prior[0], "interrupted", "interrupted",
+                "The active attempt exceeded the recovery window and was superseded.",
             )
         if prior:
             import_id = prior[1]
@@ -504,6 +541,12 @@ def import_event_log(source_path: Path | str, db_path: Path | str = IMPORT_DB_PA
                 "SELECT metadata_json FROM source_imports WHERE source_sha256=? AND profile_fingerprint=?",
                 (digest, profile.fingerprint),
             ).fetchone()
+            if existing:
+                # The fact transaction may have committed just before a process
+                # stopped while finalizing its attempt status.
+                prior = _attempt_lookup(conn, digest, profile.fingerprint)
+                if prior and prior[2] not in {"committed", "failed", "interrupted"}:
+                    _mark_attempt(conn, prior[0], "committed", "committed")
         if existing:
             original, preserved_digest = _preserve_source(source_path, storage_root)
             if preserved_digest != digest:

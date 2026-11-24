@@ -127,6 +127,16 @@ Metrics and their evidence continue to come from the calculation engine.
 Risk estimates use the synthetic model only; missing scores remain unavailable,
 and scenario costs and time savings depend on user-supplied assumptions.
 
+`src/investigations.py` adds separate `investigations`, `investigation_events`,
+and `calculation_traces` tables to the application SQLite database. Synthetic
+records use the stable `synthetic-demo` source ID; imported records use their
+immutable import ID. A case references a content-addressed, schema-versioned
+trace containing only the selected incident's calculation rows, or its
+source-count membership when the metric is source-wide, not a duplicate full
+evidence export. Trace rows cannot be updated or deleted; follow-up outcomes
+append to the case event history. The source incident and import tables remain
+unchanged.
+
 ## Deployment and next boundaries
 
 One Python application and a local SQLite database are appropriate for this portfolio scope. Streamlit calls ordinary backend functions; the calculation engine is not a separate microservice. SQLite supports multiple readers and serialized writes, but no workload/concurrency guarantee has been established here.

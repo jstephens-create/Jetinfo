@@ -6,6 +6,7 @@ navigation, evidence, and the prediction boundary stay connected in the app.
 import ast
 import csv
 import json
+from datetime import date
 from inspect import signature
 from pathlib import Path
 
@@ -15,7 +16,7 @@ import joblib
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
-from src import config, database, demo, event_ingestion, intelligence_views, tutorial, views
+from src import config, database, demo, event_ingestion, intelligence_views, investigations, tutorial, views
 from src.etl import clean_incidents
 
 
@@ -70,6 +71,9 @@ def application_data(tmp_path, monkeypatch, make_raw):
     for name in ["list_imports", "read_import", "read_snapshots", "read_events", "read_rejections"]:
         redirect(event_ingestion, name, imports_db)
     redirect(event_ingestion, "import_event_log", imports_db, storage_root=storage)
+    for name in ["initialize", "create_investigation", "list_investigations", "read_investigation",
+                 "read_events", "record_outcome"]:
+        redirect(investigations, name, demo_db)
     monkeypatch.setattr(config, "DB_PATH", demo_db)
     monkeypatch.setattr(config, "MODEL_PATH", tmp_path / "absent_model.joblib")
     monkeypatch.setattr(config, "METRICS_PATH", tmp_path / "absent_metrics.json")
@@ -185,7 +189,7 @@ def test_demo_navigation_inspector_and_explicit_missing_scenario(application_dat
     app.number_input(key="scenario_time_saved_hours_observed_hours").set_value(6.0).run()
     assert inspection_json(app)["result"]["value"] == 4
     assert any("Processing time reduction:" in item.value and "40.0%" in item.value for item in app.markdown)
-    for page in ["Overview", "Incident queue", "Import Desk", "Decision Support",
+    for page in ["Overview", "Incident queue", "Import Desk", "Investigations", "Decision Support",
                  "Data quality", "Risk lab", "Project notes", "Settings & Governance"]:
         app.radio(key="page").set_value(page).run()
         assert not app.exception, page
@@ -272,6 +276,88 @@ def test_local_import_reuses_identity_and_rule_form_runs(application_data):
     next(button for button in app.button if button.label == "Evaluate investigation rules →").click().run()
     assert not app.exception
     assert any("No investigation rules matched" in item.value for item in app.info)
+
+
+def test_investigation_case_labels_disambiguate_duplicate_cases():
+    cases = pd.DataFrame([
+        {"investigation_id": "case-a", "incident_id": "INC-1", "metric_id": "sla_attainment",
+         "status": "Open", "follow_up_date": "2026-12-01", "owner": "Alex Morgan"},
+        {"investigation_id": "case-b", "incident_id": "INC-1", "metric_id": "sla_attainment",
+         "status": "Open", "follow_up_date": "2026-12-01", "owner": "Alex Morgan"},
+    ])
+
+    labels = intelligence_views._investigation_case_labels(cases)
+
+    assert labels["case-a"] != labels["case-b"]
+    assert all(case_id in label for case_id, label in labels.items())
+
+
+@pytest.mark.parametrize("source_kind", ["demo", "imported"])
+def test_investigation_and_follow_up_are_persistent_for_both_sources(application_data, source_kind):
+    imported, _ = application_data
+    app = enter_manager()
+    if source_kind == "imported":
+        app.selectbox(key="analytical_source").select(imported.import_id).run()
+        original_source = event_ingestion.read_snapshots(imported.import_id)
+        source_id = imported.import_id
+    else:
+        original_source = database.read_incidents()
+        source_id = investigations.DEMO_SOURCE_ID
+
+    app.radio(key="page").set_value("Incident queue").run()
+    if source_kind == "imported":
+        incident_id = next(item for item in app.selectbox
+                           if item.label == "Inspect incident history").value
+        app.button(key="imported_investigation").click().run()
+    else:
+        incident_id = app.selectbox(key="review_incident").value
+        app.button(key=f"investigate_{incident_id}").click().run()
+    assert app.radio(key="page").value == "Investigations"
+    assert not app.exception
+    incident_key = f"investigation_incident_{source_id}"
+    metric_key = f"investigation_metric_{source_id}"
+    assert app.selectbox(key=incident_key).value == incident_id
+    assert app.selectbox(key=metric_key).value == "unique_incident_count"
+    assert any("Observed incident snapshot" in item.value for item in app.markdown)
+
+    app.text_input(key=f"investigation_owner_{source_id}").input("Alex Morgan")
+    app.text_area(key=f"investigation_rationale_{source_id}").input("Review the reported outcome.")
+    app.text_area(key=f"investigation_action_{source_id}").input("Check the related incident history.")
+    app.date_input(key=f"investigation_due_{source_id}_{incident_id}").set_value(date(2026, 12, 1))
+    app.button(key=f"investigation_create_submit_{source_id}").click().run()
+    assert not app.exception
+    assert any("immutable calculation-trace reference" in item.value for item in app.success)
+
+    case = investigations.list_investigations(source_id).iloc[0]
+    trace_before = investigations.read_investigation(case.investigation_id)["trace_json"]
+    trace = json.loads(trace_before)
+    assert trace["source"]["source_id"] == source_id
+    assert trace["incident_id"] == incident_id
+    assert trace["metric_definition"]["metric_id"] == "unique_incident_count"
+    assert trace["evidence"]["records"][0]["incident_id"] == incident_id
+
+    app.radio(key=f"investigation_step_{source_id}").set_value("Follow-up outcomes").run()
+    assert not app.exception
+    case_id = app.selectbox(key=f"investigation_case_{source_id}").value
+    assert case_id == case.investigation_id
+    app.selectbox(key=f"investigation_outcome_status_{case_id}").select("Resolved")
+    app.text_area(key=f"investigation_outcome_note_{case_id}").input("Service returned to normal.")
+    app.date_input(key=f"investigation_outcome_date_{case_id}").set_value(date(2026, 12, 2))
+    app.number_input(key=f"investigation_measured_value_{case_id}").set_value(2.5)
+    app.text_input(key=f"investigation_measured_unit_{case_id}").input("hours")
+    app.button(key=f"investigation_record_outcome_{case_id}").click().run()
+    assert not app.exception
+
+    saved = investigations.read_investigation(case_id)
+    assert (saved["status"], saved["outcome_status"], saved["outcome_note"]) == (
+        "Outcome recorded", "Resolved", "Service returned to normal.")
+    assert (saved["measured_value"], saved["measured_unit"]) == (2.5, "hours")
+    assert saved["trace_json"] == trace_before
+    assert investigations.read_events(case_id).event_type.tolist() == ["created", "outcome_recorded"]
+    if source_kind == "imported":
+        pd.testing.assert_frame_equal(original_source, event_ingestion.read_snapshots(imported.import_id))
+    else:
+        pd.testing.assert_frame_equal(original_source, database.read_incidents())
 
 
 @pytest.mark.parametrize("role,first", [("Analyst", "queue"), ("Manager", "overview"), ("Admin", "quality")])

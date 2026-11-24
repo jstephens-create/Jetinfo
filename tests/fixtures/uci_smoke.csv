@@ -1,0 +1,5 @@
+number,sys_updated_at,sys_mod_count,opened_at,resolved_at,closed_at,incident_state,priority,category,assignment_group,assigned_to,made_sla,active,reassignment_count,reopen_count
+INC-E2E-A,04/03/2024 10:00,0,04/03/2024 09:00,,,New,2 - High,Network,Service Desk,Avery,?,true,0,0
+INC-E2E-A,04/03/2024 13:00,1,04/03/2024 09:00,04/03/2024 12:00,04/03/2024 13:00,Closed,2 - High,Network,Network Operations,Avery,true,false,1,0
+INC-E2E-B,05/03/2024 09:00,0,05/03/2024 08:00,,,New,3 - Moderate,Software,Application Support,Sam,?,true,0,0
+INC-E2E-B,05/03/2024 12:00,2,05/03/2024 08:00,05/03/2024 11:30,05/03/2024 12:00,Resolved,3 - Moderate,Software,Application Support,Sam,false,false,0,0

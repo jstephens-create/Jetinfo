@@ -1,0 +1,3 @@
+incident_id,created_at,priority,category,affected_service,assignment_group,response_time_minutes,resolution_time_minutes,sla_target_minutes,status,sla_breached
+DUP-1,2024-03-04 10:15:00,High,Network,VPN,Network Operations,20,300,480,Closed,No
+DUP-1,2024-03-04 10:15:00,High,Network,VPN,Network Operations,20,300,480,Closed,No

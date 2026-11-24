@@ -5,7 +5,8 @@ import pandas as pd
 import pytest
 
 from src import database
-from src.calculation_tools import TOOL_SCHEMA, execute_metric_tool
+from src.calculation_tools import (TOOL_SCHEMA, build_calculation_evidence_export,
+                                   execute_metric_tool)
 from src.calculations import (METRIC_REGISTRY, CalculationContext, CalculationEngine,
                               ThresholdConfig, calculate_demo_sla)
 
@@ -56,6 +57,46 @@ def test_registry_and_results_contain_auditable_contract(source_frame):
         assert key in definition.to_dict()
     with pytest.raises(TypeError):
         METRIC_REGISTRY["invented"] = definition
+
+
+def test_calculation_evidence_export_bundles_source_result_definition_and_all_rows(source_frame):
+    engine = engine_for(source_frame)
+    inspection = engine.inspect("source_sla_attainment")
+
+    exported = json.loads(build_calculation_evidence_export(
+        engine, inspection, {}, {}).decode("utf-8"))
+
+    assert exported["schema"] == "okai.calculation-evidence.v1"
+    assert exported["source"]["dataset_id"] == "test-dataset"
+    assert exported["source"]["import_id"] == "import-test"
+    assert exported["source"]["timezone"] == "unknown"
+    assert exported["metric_definition"]["metric_id"] == "source_sla_attainment"
+    assert exported["result"]["value"] == 50.0
+    assert exported["result"]["formula_version"]
+    assert exported["evidence"]["record_count"] == len(inspection["records"]) == 5
+    assert exported["evidence"]["records"][2]["included"] is False
+    assert exported["evidence"]["records"][2]["reason"]
+
+
+def test_calculation_evidence_export_preserves_scenario_inputs_and_confirmed_population(source_frame):
+    engine = engine_for(source_frame)
+    parameters = {"currency": "USD", "operational_cost": 1000, "incident_count": 5}
+    inspection = engine.inspect("cost_per_incident", parameters)
+    supporting = engine.inspect("unique_incident_count")["records"]
+
+    exported = json.loads(build_calculation_evidence_export(
+        engine, inspection, parameters,
+        {"operational_cost": "Entered by you · assumption",
+         "incident_count": "Calculated from this source · you confirmed the cost covers all of them"},
+        supporting,
+    ).decode("utf-8"))
+
+    assert exported["result"]["value"] == 200.0
+    assert exported["inputs"]["values"] == parameters
+    assert exported["inputs"]["origins"]["operational_cost"] == "Entered by you · assumption"
+    assert exported["evidence"]["record_count"] == 1
+    assert exported["evidence"]["supporting_incident_record_count"] == 5
+    assert len(exported["evidence"]["supporting_incident_records"]) == 5
 
 
 def test_all_sixteen_metrics_remain_registered_without_full_source_data():

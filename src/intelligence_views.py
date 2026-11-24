@@ -5,6 +5,7 @@ button callback changes navigation before the next Streamlit rerun, avoiding a
 write to a widget's state after that widget has already been rendered.
 """
 from dataclasses import replace
+from datetime import date
 from hashlib import sha256
 from pathlib import Path
 from typing import NamedTuple
@@ -15,11 +16,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src import demo, tutorial, ui
+from src import demo, investigations as casework, tutorial, ui
 from src.calculations import (AVAILABLE, NEEDS_INPUTS, SCENARIO_PARAMETERS, UNAVAILABLE,
                               CalculationContext, CalculationEngine, ThresholdConfig,
                               COMPLETENESS_FIELDS)
-from src.calculation_tools import TOOL_SCHEMA, execute_metric_tool
+from src.calculation_tools import (TOOL_SCHEMA, build_calculation_evidence_export,
+                                   execute_metric_tool)
 from src import event_ingestion as imports
 from src.config import ROOT
 from src.guidance import (ASSUMPTION_TAG, CURRENCIES, GROUP_LABELS, INPUT_SPECS, ORIGIN_ENTERED, ORIGIN_SOURCE,
@@ -35,13 +37,19 @@ GROUP_COLUMN_LABELS = {
 }
 
 
-def navigate(page, metric_id=None):
+def navigate(page, metric_id=None, incident_id=None):
     if page == "Calculation Inspector" and metric_id == "demo_sla_attainment":
         tutorial.inspection_requested("overview")
     st.session_state["page"] = page
     if metric_id is not None:
         st.session_state["inspector_metric"] = metric_id
         st.session_state.pop("inspector_search", None)
+    if page == "Investigations":
+        st.session_state["investigation_seed_source"] = st.session_state.get("analytical_source", "demo")
+        if metric_id is not None:
+            st.session_state["investigation_seed_metric"] = metric_id
+        if incident_id is not None:
+            st.session_state["investigation_seed_incident"] = incident_id
 
 
 def _metric_name(engine, metric_id):
@@ -100,7 +108,7 @@ def source_selector():
         st.session_state["analytical_source"] = "demo"
     selected = st.selectbox("Analysis source", list(labels),
                             format_func=labels.get, key="analytical_source")
-    st.caption("Metrics follow this source. Saved demo reviews use the synthetic queue.")
+    st.caption("Metrics and investigations follow this source. Legacy demo reviews stay on the synthetic queue.")
     st.button("Import a source", key="source_import", on_click=navigate,
               args=("Import Desk",), width="stretch")
     return selected
@@ -553,6 +561,196 @@ def calculation_inspector(engine, role=None):
             st.dataframe(shown.head(250), hide_index=True, width="stretch")
     with technical_tab:
         st.json({"definition": definition, "result": result, "parameters": parameters})
+        st.caption("The portable trace includes source provenance, the metric definition and result, input origins, and complete evidence.")
+        st.download_button(
+            "Download complete calculation trace ↓",
+            build_calculation_evidence_export(engine, inspection, parameters, inputs.origins, records),
+            f"okai_{selected}_calculation_trace.json",
+            "application/json",
+            key="inspector_trace_export",
+        )
+    st.button("Investigate a source incident →", key="inspector_start_investigation",
+              on_click=navigate, args=("Investigations", selected), width="stretch")
+
+
+def _selected_incident_rows(frame: pd.DataFrame, incident_id: str) -> pd.DataFrame:
+    if "incident_id" not in frame:
+        return frame.iloc[0:0]
+    return frame[frame["incident_id"].astype("string").eq(incident_id)]
+
+
+def _investigation_case_labels(cases):
+    return {
+        row.investigation_id:
+            f"{row.incident_id} · {row.metric_id} · {row.status} · follow up {row.follow_up_date}"
+            f" · {row.owner} · case {row.investigation_id}"
+        for row in cases.itertuples()
+    }
+
+
+def investigation_workbench(engine, role):
+    ui.section("INVESTIGATIONS", "Connect evidence to a follow-up.",
+               "Source observations, scenario assumptions, user decisions, and reported outcomes stay distinct.")
+    source_scope(engine)
+    source_id = casework.stable_source_id(engine.context)
+    selector_source_id = "demo" if engine.context.source_kind == "demo" else engine.context.import_id
+    incidents = engine.incidents
+    incident_ids = incidents["incident_id"].dropna().astype(str).tolist()
+    if not incident_ids:
+        st.info("This source has no incident snapshots to investigate.")
+        return
+
+    incident_key = f"investigation_incident_{source_id}"
+    metric_key = f"investigation_metric_{source_id}"
+    step_key = f"investigation_step_{source_id}"
+    seed_source = st.session_state.pop("investigation_seed_source", None)
+    seed_incident = st.session_state.pop("investigation_seed_incident", None)
+    seed_metric = st.session_state.pop("investigation_seed_metric", None)
+    if seed_source == selector_source_id and seed_incident in incident_ids:
+        st.session_state[incident_key] = seed_incident
+    if seed_source == selector_source_id and seed_metric in engine.registry:
+        st.session_state[metric_key] = seed_metric
+
+    st.caption("Observed rows come from the selected source. Scenario values are user assumptions. "
+               "Owner, rationale, and next action are decisions; follow-up outcomes are user-reported.")
+    st.caption("Owner names are entered locally; the demo persona is not verified identity or access control.")
+    step = st.radio("Investigation step", ["Create investigation", "Follow-up outcomes"],
+                    horizontal=True, key=step_key)
+    if step == "Create investigation":
+        incident_id = st.selectbox("Incident", incident_ids, key=incident_key)
+        metric_ids = list(engine.registry)
+        metric_id = st.selectbox("Calculation evidence", metric_ids, key=metric_key,
+                                 format_func=lambda key: _metric_name(engine, key))
+        inputs = _scenario_parameters(engine, metric_id)
+        parameters = inputs.parameters
+        if metric_id == "field_completeness":
+            fields = [column for column in incidents.columns if column in COMPLETENESS_FIELDS]
+            if not fields:
+                st.error("This source has no supported incident fields to inspect.")
+                return
+            parameters["field"] = st.selectbox("Incident field", fields,
+                                               key=f"investigation_field_{source_id}")
+        try:
+            inspection = engine.inspect(metric_id, parameters=parameters)
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        definition, result, all_records = (
+            inspection["definition"], inspection["result"], inspection["records"])
+        value = format_value(engine.calculate(metric_id, parameters=parameters))
+        a, b, c = st.columns([2, 1, 1])
+        with a:
+            ui.metric(_metric_name(engine, metric_id), value, result["status"], ui.ORANGE)
+        with b:
+            ui.metric("Eligible", f"{result['eligible_count']:,}", "Source-defined population", ui.CYAN)
+        with c:
+            ui.metric("Excluded", f"{result['excluded_count']:,}", "Review reasons below", ui.PURPLE)
+        st.code(definition["formula"], language="text")
+        if result["status"] != "available":
+            st.warning(result.get("unavailable_reason") or "This calculation is unavailable from the selected source.")
+        if metric_id in SCENARIO_PARAMETERS:
+            st.info("This is a source-wide scenario, not a cost or time attribution to the selected incident.")
+
+        selected_records = _selected_incident_rows(all_records, incident_id)
+        membership_records = _selected_incident_rows(
+            engine.inspect("unique_incident_count")["records"], incident_id)
+        st.markdown("**Observed incident snapshot**")
+        snapshot = incidents[incidents["incident_id"].astype("string").eq(incident_id)]
+        snapshot_columns = [column for column in [
+            "incident_id", "opened_at", "created_at", "status", "priority",
+            "category", "assignment_group", "source_row"
+        ] if column in snapshot]
+        st.dataframe(snapshot[snapshot_columns], hide_index=True, width="stretch")
+        st.markdown("**Calculation evidence for this incident**")
+        if selected_records.empty:
+            st.info("The selected metric has no row-level evidence for this incident. "
+                    "The stored trace will retain its calculation status and incident membership.")
+        else:
+            st.dataframe(selected_records.head(250), hide_index=True, width="stretch")
+            st.caption(f"{len(selected_records):,} metric evidence row(s) for this incident.")
+        with st.expander("Inspect the source-count membership row"):
+            st.dataframe(membership_records, hide_index=True, width="stretch")
+
+        with st.form(f"investigation_create_{source_id}_{incident_id}"):
+            owner = st.text_input("Owner · responsible person or team", max_chars=120,
+                                  key=f"investigation_owner_{source_id}")
+            rationale = st.text_area("Rationale · why investigate this incident?", max_chars=1500,
+                                     key=f"investigation_rationale_{source_id}")
+            next_action = st.text_area("Next action · what should happen?", max_chars=1000,
+                                       key=f"investigation_action_{source_id}")
+            follow_up_date = st.date_input("Follow-up date", value=None, key=f"investigation_due_{source_id}_{incident_id}")
+            submitted = st.form_submit_button("Save investigation →", type="primary",
+                                              key=f"investigation_create_submit_{source_id}")
+        if submitted:
+            try:
+                trace = casework.build_trace_reference(
+                    engine, incident_id, inspection, parameters, inputs.origins,
+                    membership_records)
+                casework.create_investigation(trace, owner, rationale, next_action,
+                                              follow_up_date, role)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.success("Investigation saved with an immutable calculation-trace reference.")
+    else:
+        cases = casework.list_investigations(source_id)
+        if cases.empty:
+            st.info("No investigations are recorded for this source yet.")
+            return
+        labels = _investigation_case_labels(cases)
+        case_id = st.selectbox("Investigation", list(labels), format_func=labels.get,
+                               key=f"investigation_case_{source_id}")
+        case = casework.read_investigation(case_id)
+        trace = json.loads(case["trace_json"])
+        st.write(f"**Incident:** {case['incident_id']} · **Owner:** {case['owner']} · "
+                 f"**Follow-up:** {case['follow_up_date']} · **Status:** {case['status']}")
+        st.write(f"**Rationale:** {case['rationale']}")
+        st.write(f"**Next action:** {case['next_action']}")
+        st.caption(f"Stable source ID: {case['source_id']} · Trace: {case['trace_id']} "
+                   f"(schema v{case['trace_version']}, formula {case['formula_version']})")
+        st.json({"source": trace["source"], "metric_definition": trace["metric_definition"],
+                 "result": trace["result"], "inputs": trace["inputs"], "evidence": trace["evidence"]})
+        st.button("Open this metric in Calculation Inspector →", key=f"investigation_inspect_{case_id}",
+                  on_click=navigate, args=("Calculation Inspector", case["metric_id"]), width="stretch")
+        with st.form(f"investigation_outcome_{case_id}"):
+            outcome_options = ["Choose an outcome", *casework.OUTCOME_STATUSES]
+            existing_status = case["outcome_status"]
+            status_index = outcome_options.index(existing_status) if existing_status else 0
+            outcome_status = st.selectbox("Reported outcome status", outcome_options, index=status_index,
+                                          key=f"investigation_outcome_status_{case_id}")
+            outcome_note = st.text_area("Outcome note · what was observed after the action?",
+                                        value=case["outcome_note"] or "", max_chars=1500,
+                                        key=f"investigation_outcome_note_{case_id}")
+            outcome_date = st.date_input(
+                "Outcome observed date",
+                value=date.fromisoformat(case["outcome_date"]) if case["outcome_date"] else None,
+                key=f"investigation_outcome_date_{case_id}")
+            measured_value = st.number_input(
+                "Measured outcome value · optional", value=case["measured_value"],
+                step=0.1, format="%.2f", key=f"investigation_measured_value_{case_id}")
+            measured_unit = st.text_input(
+                "Measured outcome unit · required with a value",
+                value=case["measured_unit"] or "", max_chars=40,
+                key=f"investigation_measured_unit_{case_id}")
+            st.caption("Measurements and outcome notes are user-reported; OKai does not independently verify them.")
+            outcome_submitted = st.form_submit_button(
+                "Record follow-up outcome →", type="primary",
+                key=f"investigation_record_outcome_{case_id}")
+        if outcome_submitted:
+            try:
+                if outcome_status == "Choose an outcome":
+                    raise ValueError("Choose a reported outcome status.")
+                casework.record_outcome(case_id, outcome_status, outcome_note, outcome_date,
+                                        measured_value, measured_unit, role)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.success("Follow-up outcome recorded; the calculation trace remains unchanged.")
+        events = casework.read_events(case_id)
+        st.markdown("**Investigation history**")
+        if not events.empty:
+            st.dataframe(events[["event_type", "actor_role", "happened_at", "details_json"]],
+                         hide_index=True, width="stretch")
 
 
 def imported_incidents(engine, metadata):
@@ -581,6 +779,8 @@ def imported_incidents(engine, metadata):
     st.caption("The first observed event is not guaranteed to be the incident's creation event. "
                "Enriched outcome timestamps are historical outcomes, not prediction inputs.")
     st.dataframe(events, hide_index=True, width="stretch", height=330)
+    st.button("Create evidence-linked investigation →", key="imported_investigation",
+              on_click=navigate, args=("Investigations", None, incident_id), width="stretch")
 
 
 def import_quality(engine, metadata):

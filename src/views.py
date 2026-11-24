@@ -157,9 +157,17 @@ def _open_queue(incidents, workspace_id, role, model):
                 # The queue above was read before the save. A fresh pass reads
                 # the committed values and displays a consistent workload/timeline.
                 st.rerun()
+        st.button("Create evidence-linked investigation →", key=f"investigate_{chosen}",
+                  on_click=_open_investigation, args=(chosen,), width="stretch")
     with activity:
         ui.section("THE HANDOVER", "Incident activity.")
         ui.timeline(demo.read_events(workspace_id, chosen), owner_labels=demo.OWNER_LABELS)
+
+
+def _open_investigation(incident_id):
+    st.session_state["page"] = "Investigations"
+    st.session_state["investigation_seed_source"] = "demo"
+    st.session_state["investigation_seed_incident"] = incident_id
 
 
 def _archive(incidents):

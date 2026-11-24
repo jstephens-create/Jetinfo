@@ -1,0 +1,2 @@
+incident_id,created_at,priority,category,affected_service,assignment_group,response_time_minutes,resolution_time_minutes,sla_target_minutes,status,sla_breached
+BAD-TS,2024-13-40 10:00:00,High,Network,VPN,Network Operations,20,300,480,Closed,No

@@ -21,14 +21,58 @@ CREATE TABLE IF NOT EXISTS incidents (
     category                TEXT NOT NULL,
     affected_service        TEXT NOT NULL,
     assignment_group        TEXT NOT NULL,
-    response_time_minutes   REAL NOT NULL CHECK (response_time_minutes >= 0),
-    resolution_time_minutes REAL,                  -- NULL while incident is open
-    sla_target_minutes      INTEGER NOT NULL,
-    status                  TEXT NOT NULL,
-    sla_breached            INTEGER,               -- 1/0, NULL while open (outcome unknown)
-    sla_margin_minutes      REAL,                  -- target - resolution (negative = breached)
+    response_time_minutes   REAL NOT NULL CHECK (
+        response_time_minutes >= 0 AND response_time_minutes <= 1.7976931348623157e308
+    ),
+    resolution_time_minutes REAL CHECK (
+        resolution_time_minutes IS NULL OR
+        (resolution_time_minutes >= 0 AND resolution_time_minutes <= 1.7976931348623157e308)
+    ),                                              -- NULL while incident is open
+    sla_target_minutes      INTEGER NOT NULL CHECK (sla_target_minutes > 0),
+    status                  TEXT NOT NULL CHECK (status IN ('Resolved','Closed','Open','In Progress')),
+    sla_breached            INTEGER CHECK (sla_breached IN (0, 1) OR sla_breached IS NULL),
+    sla_margin_minutes      REAL CHECK (
+        sla_margin_minutes IS NULL OR abs(sla_margin_minutes) <= 1.7976931348623157e308
+    ),                                              -- target - resolution (negative = breached)
     loaded_at               TEXT NOT NULL
 );
+
+-- Additive guards also protect databases created before these CHECK constraints.
+CREATE TRIGGER IF NOT EXISTS incidents_integrity_insert
+BEFORE INSERT ON incidents
+WHEN NEW.sla_target_minutes <= 0
+  OR NEW.status NOT IN ('Resolved','Closed','Open','In Progress')
+  OR NEW.response_time_minutes > 1.7976931348623157e308
+  OR (NEW.resolution_time_minutes IS NOT NULL AND
+      (NEW.resolution_time_minutes < NEW.response_time_minutes
+       OR NEW.resolution_time_minutes > 1.7976931348623157e308))
+  OR (NEW.sla_breached IS NOT NULL AND NEW.sla_breached NOT IN (0, 1))
+  OR (NEW.sla_margin_minutes IS NOT NULL AND abs(NEW.sla_margin_minutes) > 1.7976931348623157e308)
+  OR (NEW.status IN ('Open','In Progress') AND
+      (NEW.resolution_time_minutes IS NOT NULL OR NEW.sla_breached IS NOT NULL))
+  OR (NEW.status IN ('Resolved','Closed') AND
+      (NEW.resolution_time_minutes IS NULL OR NEW.sla_breached IS NULL))
+BEGIN
+    SELECT RAISE(ABORT, 'Incident values violate operational data constraints.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS incidents_integrity_update
+BEFORE UPDATE ON incidents
+WHEN NEW.sla_target_minutes <= 0
+  OR NEW.status NOT IN ('Resolved','Closed','Open','In Progress')
+  OR NEW.response_time_minutes > 1.7976931348623157e308
+  OR (NEW.resolution_time_minutes IS NOT NULL AND
+      (NEW.resolution_time_minutes < NEW.response_time_minutes
+       OR NEW.resolution_time_minutes > 1.7976931348623157e308))
+  OR (NEW.sla_breached IS NOT NULL AND NEW.sla_breached NOT IN (0, 1))
+  OR (NEW.sla_margin_minutes IS NOT NULL AND abs(NEW.sla_margin_minutes) > 1.7976931348623157e308)
+  OR (NEW.status IN ('Open','In Progress') AND
+      (NEW.resolution_time_minutes IS NOT NULL OR NEW.sla_breached IS NOT NULL))
+  OR (NEW.status IN ('Resolved','Closed') AND
+      (NEW.resolution_time_minutes IS NULL OR NEW.sla_breached IS NULL))
+BEGIN
+    SELECT RAISE(ABORT, 'Incident values violate operational data constraints.');
+END;
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     run_id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,7 +123,8 @@ def connect(db_path: Path | str = DB_PATH):
     its ordinary SQL writes. Related rows are saved together or not at all.
     """
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    conn.execute("PRAGMA busy_timeout = 30000")
     # SQLite requires this switch for each connection; REFERENCES declarations
     # alone do not enforce that predictions/rejections point to existing parents.
     conn.execute("PRAGMA foreign_keys = ON")

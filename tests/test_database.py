@@ -1,5 +1,8 @@
 """Database insertion, idempotent reruns, and the end-to-end pipeline."""
+import sqlite3
+
 import pandas as pd
+import pytest
 
 from src import database
 from src.etl import clean_incidents, run_pipeline
@@ -17,6 +20,51 @@ def test_insert_and_read_back(make_raw, db_path):
     df = database.read_incidents(db_path)
     assert sorted(df["incident_id"]) == ["A", "B"]
     assert df.loc[df.incident_id == "A", "priority"].item() == "High"
+
+
+def test_connections_enable_foreign_keys_and_a_busy_timeout(db_path):
+    with database.connect(db_path) as conn:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+
+
+def test_new_schema_rejects_non_finite_incident_durations(make_raw, db_path):
+    database.init_db(db_path)
+    batch = _clean(make_raw, {"incident_id": "INF"})
+    batch["response_time_minutes"] = batch.response_time_minutes.astype(float)
+    batch.loc[0, "response_time_minutes"] = float("inf")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        with database.connect(db_path) as conn:
+            database.upsert_incidents(conn, batch)
+
+    assert database.read_incidents(db_path).empty
+
+
+def test_additive_triggers_protect_legacy_incident_tables(db_path):
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("""
+            CREATE TABLE incidents (
+                incident_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, priority TEXT NOT NULL,
+                category TEXT NOT NULL, affected_service TEXT NOT NULL, assignment_group TEXT NOT NULL,
+                response_time_minutes REAL NOT NULL, resolution_time_minutes REAL,
+                sla_target_minutes INTEGER NOT NULL, status TEXT NOT NULL, sla_breached INTEGER,
+                sla_margin_minutes REAL, loaded_at TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            """INSERT INTO incidents VALUES
+               ('A','2024-03-04 10:15:00','High','Network','VPN','Network Operations',
+                20,300,480,'Closed',0,180,'2024-03-04 10:15:00')"""
+        )
+
+    database.init_db(db_path)
+    with pytest.raises(sqlite3.IntegrityError, match="Incident values"):
+        with database.connect(db_path) as conn:
+            conn.execute("UPDATE incidents SET status='Unknown' WHERE incident_id='A'")
+    with pytest.raises(sqlite3.IntegrityError, match="Incident values"):
+        with database.connect(db_path) as conn:
+            conn.execute("UPDATE incidents SET resolution_time_minutes=10 WHERE incident_id='A'")
 
 
 def test_reloading_same_incidents_does_not_duplicate(make_raw, db_path):

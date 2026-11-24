@@ -127,11 +127,15 @@ def clean_incidents(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, int]
         (df["affected_service"].isna(), "missing affected_service"),
         (df["assignment_group"].isna(), "missing assignment_group"),
         (response.isna(), "response_time not a number"),
+        (response.notna() & ~np.isfinite(response), "non-finite response_time"),
         (response < 0, "negative response_time"),
+        (resolution.notna() & ~np.isfinite(resolution), "non-finite resolution_time"),
         (~status.isin(VALID_STATUSES), "invalid status"),
         (is_resolved & resolution.isna(), "resolved incident missing resolution_time"),
         (status.isin(OPEN_STATUSES) & resolution.notna(), "open incident has resolution_time"),
-        (resolution < response, "resolution_time shorter than response_time"),
+        (resolution.notna() & response.notna()
+         & np.isfinite(resolution) & np.isfinite(response)
+         & resolution.lt(response), "resolution_time shorter than response_time"),
     ]
     reasons = pd.Series([[] for _ in range(len(df))], index=df.index)
     # A row can violate several rules. Store all its reasons, but count that row

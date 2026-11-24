@@ -54,6 +54,19 @@ def test_invalid_rows_are_rejected_with_reasons(make_raw):
     assert reasons["OPEN_WITH_RES"] == "open incident has resolution_time"
 
 
+def test_non_finite_durations_are_rejected_instead_of_becoming_unknown_sla(make_raw):
+    raw = make_raw(
+        {"incident_id": "INF-RESPONSE", "response_time_minutes": "inf"},
+        {"incident_id": "INF-RESOLUTION", "resolution_time_minutes": "inf"},
+    )
+    clean, rejected, _ = clean_incidents(raw)
+
+    assert clean.empty
+    reasons = dict(zip(rejected.incident_id, rejected.rejection_reason))
+    assert reasons["INF-RESPONSE"] == "non-finite response_time"
+    assert reasons["INF-RESOLUTION"] == "non-finite resolution_time"
+
+
 def test_open_incident_without_resolution_is_valid(make_raw):
     clean, rejected, _ = clean_incidents(make_raw({"status": "In Progress",
                                                    "resolution_time_minutes": None}))

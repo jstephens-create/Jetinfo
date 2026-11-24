@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Mapping
 
 import pandas as pd
@@ -63,6 +65,28 @@ def _json_records(frame: pd.DataFrame) -> list[dict]:
     # pandas handles numpy scalars, nullable Booleans, timestamps, and NaN here.
     # JSON null is explicit unknown; it is never changed to a numeric zero.
     return json.loads(frame.to_json(orient="records", date_format="iso"))
+
+
+def build_calculation_evidence_export(engine, inspection: Mapping, parameters: Mapping,
+                                      parameter_origins: Mapping, supporting_records: pd.DataFrame | None = None) -> bytes:
+    """Create a portable trace joining a calculation to its source and evidence."""
+    result_records = inspection["records"]
+    evidence = {"record_count": len(result_records), "records": _json_records(result_records)}
+    if supporting_records is not None and not supporting_records.equals(result_records):
+        evidence["supporting_incident_record_count"] = len(supporting_records)
+        evidence["supporting_incident_records"] = _json_records(supporting_records)
+    origins = {name: parameter_origins.get(name, "Selected in Calculation Inspector")
+               for name in parameters}
+    payload = {
+        "schema": "okai.calculation-evidence.v1",
+        "exported_at_utc": datetime.now(timezone.utc).isoformat(),
+        "source": asdict(engine.context),
+        "metric_definition": inspection["definition"],
+        "result": inspection["result"],
+        "inputs": {"values": dict(parameters), "origins": origins},
+        "evidence": evidence,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
 
 
 def explain_result(result: Mapping) -> str:

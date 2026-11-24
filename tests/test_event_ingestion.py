@@ -9,13 +9,14 @@ import json
 import os
 import sqlite3
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from src import database, event_ingestion
+from src.calculations import CalculationContext, CalculationEngine
 from src.event_ingestion import (
     UCI_PROFILE, MappingProfile, event_count, import_event_log, list_imports,
     list_import_attempts, read_events, read_import, read_initial_snapshots,
@@ -171,6 +172,71 @@ def test_identical_file_and_profile_are_idempotent_but_changed_profile_is_separa
     assert len(list_imports(db)) == 2
     assert read_import(third.import_id, db)["mapping_profile"]["source_timezone"] == "UTC"
     assert read_import(result.import_id, db)["timings_seconds"] == result.timings_seconds
+
+
+def test_browser_smoke_fixture_has_known_import_and_metric_results(tmp_path):
+    source = Path(__file__).parent / "fixtures" / "uci_smoke.csv"
+    result = import_event_log(source, db_path=tmp_path / "imports.db",
+                              storage_root=tmp_path / "preserved")
+    snapshots = read_snapshots(result.import_id, tmp_path / "imports.db")
+    events = read_events(result.import_id, tmp_path / "imports.db",
+                         columns=["incident_id", "source_row", "event_at"])
+    context = CalculationContext(
+        dataset_id=result.import_id, import_id=result.import_id,
+        source_name=result.source_name, source_kind="event_log",
+        timezone="unknown", observation_start=str(events.event_at.min()),
+        observation_end=str(events.event_at.max()),
+    )
+    inspection = CalculationEngine(snapshots, events=events, context=context).inspect(
+        "source_sla_attainment"
+    )
+
+    assert (result.rows_read, result.events_loaded, result.incidents_loaded, result.rows_rejected) == (4, 4, 2, 0)
+    assert inspection["result"]["value"] == 50.0
+    assert (inspection["result"]["numerator"], inspection["result"]["denominator"]) == (1, 2)
+    assert inspection["result"]["dataset_id"] == result.import_id
+
+
+def test_duplicate_import_does_not_supersede_an_active_attempt(tmp_path):
+    source = tmp_path / "source.csv"
+    pd.DataFrame([event()], columns=list(event())).to_csv(source, index=False)
+    db = tmp_path / "imports.db"
+    storage = tmp_path / "preserved"
+    event_ingestion.init_import_db(db)
+    digest = event_ingestion._sha256(source)
+    attempt_id, import_id = event_ingestion._start_attempt(db, digest, UCI_PROFILE.fingerprint)
+
+    with pytest.raises(ValueError, match="already in progress"):
+        import_event_log(source, db, storage)
+
+    attempts = list_import_attempts(db)
+    assert len(attempts) == 1
+    assert attempts.iloc[0].attempt_id == attempt_id
+    assert attempts.iloc[0].import_id == import_id
+    assert attempts.iloc[0].status == "preserving"
+
+
+def test_stale_import_attempt_is_recovered_without_changing_its_identity(tmp_path):
+    source = tmp_path / "source.csv"
+    pd.DataFrame([event()], columns=list(event())).to_csv(source, index=False)
+    db = tmp_path / "imports.db"
+    storage = tmp_path / "preserved"
+    event_ingestion.init_import_db(db)
+    digest = event_ingestion._sha256(source)
+    attempt_id, import_id = event_ingestion._start_attempt(db, digest, UCI_PROFILE.fingerprint)
+    stale_start = (datetime.now(timezone.utc) - event_ingestion.ATTEMPT_STALE_AFTER
+                   - timedelta(seconds=1)).isoformat()
+    with database.connect(db) as conn:
+        conn.execute("UPDATE source_import_attempts SET started_at=? WHERE attempt_id=?",
+                     (stale_start, attempt_id))
+
+    result = import_event_log(source, db, storage)
+    attempts = list_import_attempts(db)
+
+    assert result.import_id == import_id and result.events_loaded == 1
+    assert attempts.status.tolist() == ["committed", "interrupted"]
+    assert attempts.iloc[1].attempt_id == attempt_id
+    assert "recovery window" in attempts.iloc[1].error_message
 
 
 def test_failed_commit_is_atomic_recorded_and_retryable(tmp_path, monkeypatch):
