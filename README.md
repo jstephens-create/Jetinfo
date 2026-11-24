@@ -14,6 +14,8 @@ The [metric reference](docs/METRICS.md), [event-log case study](docs/CASE_STUDY.
 
 ## Quick start
 
+[Try the live OKai demo](https://jstephens-create.github.io/Jetinfo/) and choose **Start guided demo**. The first visit loads Python in your browser. Each tab has a disposable copy of the synthetic dataset. Download any review you want to keep before refreshing. The local edition below also supports CSV imports and persistent workspaces.
+
 ### Windows / VS Code
 
 Open the `Jetinfo` folder itself in VS Code (File > Open Folder). It is the
