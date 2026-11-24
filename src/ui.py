@@ -1,5 +1,6 @@
 """Presentation helpers for OKai's editorial, reference-inspired interface."""
 import json
+import sys
 from base64 import b64encode
 from contextlib import contextmanager
 from html import escape
@@ -17,6 +18,23 @@ GREEN, INK, MUTED = COLORS["green"], COLORS["ink"], COLORS["muted"]
 RISK_COLORS = {"Low": GREEN, "Medium": "#A16400", "High": "#D73A19"}
 CONNECTOR_ART = b64encode((Path(__file__).resolve().parent.parent / "assets" / "connectors.svg").read_bytes()).decode("ascii")
 WORDMARK_ART = b64encode((Path(__file__).resolve().parent.parent / "assets" / "okai-wordmark.svg").read_bytes()).decode("ascii")
+
+def download_button(label, data, file_name, mime, **options):
+    if sys.platform != "emscripten":
+        return st.download_button(label, data, file_name, mime, **options)
+    if options.get("disabled"):
+        st.caption(label)
+        return
+    # The browser runtime has no Streamlit HTTP media endpoint.
+    from streamlit.components.v1 import html
+    payload = data.encode("utf-8") if isinstance(data, str) else data
+    encoded = b64encode(payload).decode("ascii")
+    html(
+        '<style>body{margin:0}a{display:inline-block;font:600 15px system-ui;color:#171717;'
+        'padding:6px 12px;border:1px solid #777;border-radius:6px;text-decoration:none}</style>'
+        f'<a download="{escape(file_name)}" href="data:{escape(mime)};base64,{encoded}">'
+        f'{escape(label)}</a>', height=40)
+
 
 STYLES = """
 <style>

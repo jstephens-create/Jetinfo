@@ -5,6 +5,7 @@ variables are recreated on each run; session_state keeps one browser session's
 widget/persona choices, while SQLite keeps review changes across page refreshes.
 """
 import json
+import sys
 from uuid import uuid4
 
 import joblib
@@ -15,6 +16,10 @@ from src.config import DB_PATH, METRICS_PATH, MODEL_PATH
 
 PAGES = ["Overview", "Incident queue", "Calculation Inspector", "Investigations", "Decision Support",
          "Data quality", "Risk lab", "Project notes", "Settings & Governance", "Import Desk"]
+BROWSER_DEMO = sys.platform == "emscripten"
+if BROWSER_DEMO:
+    PAGES.remove("Import Desk")
+
 LANDING = {"Analyst": "Incident queue", "Manager": "Overview", "Admin": "Data quality"}
 # Landing cards can open these three demo views directly. An allowlist keeps
 # query parameters from choosing arbitrary pages or pretending to be real auth.
@@ -84,7 +89,9 @@ def login(incidents, metrics, runs):
     with introduction:
         ui.section("A DATA PROJECT, END TO END", "What deserves attention next?",
                    "OKai turns incident exports into traceable metrics and investigation evidence. "
-                   "Explore the synthetic operations team, then import a historical event log and inspect every calculation.")
+                   + ("Explore the synthetic operations team, inspect a calculation, and save an investigation."
+                      if BROWSER_DEMO else
+                      "Explore the synthetic operations team, then import a historical event log and inspect every calculation."))
         successes = runs[runs.status.eq("success")]
         raw_rows = int(successes.iloc[0].rows_read) if not successes.empty else "—"
         a, b, c = st.columns(3)
@@ -107,10 +114,14 @@ def login(incidents, metrics, runs):
             st.caption("Analyst → review queue · Manager → overview · Admin → data quality")
             st.form_submit_button("Open workspace →", type="primary", width="stretch", on_click=enter_workspace)
             st.form_submit_button("Start guided demo", width="stretch", on_click=enter_guided_demo)
-            st.form_submit_button("Import a CSV", width="stretch", on_click=enter_import)
-        st.caption("Mock login · Fictional identities · Synthetic incident data. "
-                   "Workspace changes are saved locally and survive a page refresh.")
-        st.caption("CSV import currently supports the UCI Incident Management event-log profile.")
+            if not BROWSER_DEMO:
+                st.form_submit_button("Import a CSV", width="stretch", on_click=enter_import)
+        if BROWSER_DEMO:
+            st.caption("Synthetic data. Reviews stay in this tab until you refresh or close it. Download a review to keep it.")
+        else:
+            st.caption("Mock login · Fictional identities · Synthetic incident data. "
+                       "Workspace changes are saved locally and survive a page refresh.")
+            st.caption("CSV import currently supports the UCI Incident Management event-log profile.")
     a, b, c = st.columns(3)
     with a:
         ui.feature("01 / CLEAN", "Start with better inputs.",
@@ -137,7 +148,7 @@ def sidebar(workspace_id):
                 f'<div class="persona-title">{profile["title"]}</div></div></div>')
         st.radio("Workspace", PAGES, key="page", label_visibility="collapsed")
         st.divider()
-        source_id = intelligence_views.source_selector()
+        source_id = "demo" if BROWSER_DEMO else intelligence_views.source_selector()
         tutorial.navigation_observed()
         st.divider()
         tutorial.sidebar(role, source_id)
@@ -146,6 +157,9 @@ def sidebar(workspace_id):
             st.button("Reset demo workspace", key="admin_reset_sidebar", on_click=reset_demo,
                       args=(workspace_id,), width="stretch")
         st.button("Leave workspace ↗", key="sign_out", on_click=sign_out, width="stretch")
+        if BROWSER_DEMO:
+            st.caption("Synthetic demo ? Changes last for this tab session.")
+            return role, source_id
         st.caption(f"DEMO / {workspace_id[:8].upper()}\n\n"
                    "Personas simulate access. The analysis source is selected above; imports are shared locally.")
     return role, source_id
@@ -233,7 +247,7 @@ def main():
             views.data_quality(runs, workspace_id, role)
         else:
             intelligence_views.import_quality(engine, import_metadata)
-    elif page == "Import Desk":
+    elif page == "Import Desk" and not BROWSER_DEMO:
         intelligence_views.import_desk()
     elif page == "Calculation Inspector":
         intelligence_views.calculation_inspector(engine, role)

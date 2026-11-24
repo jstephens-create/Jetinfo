@@ -399,7 +399,7 @@ def _render_action(action, evidence_csv, metric_id):
     if action.kind == "hint":
         st.info(f"**Next:** {action.label}")
     elif action.action_id == "export":
-        st.download_button(action.label, evidence_csv, f"okai_{metric_id}_evidence.csv", "text/csv",
+        ui.download_button(action.label, evidence_csv, f"okai_{metric_id}_evidence.csv", "text/csv",
                            key="inspector_export", type=kind, disabled=not action.enabled, width="stretch")
     else:
         callback, args = (_show_excluded, ()) if action.action_id == "excluded" else (
@@ -562,7 +562,7 @@ def calculation_inspector(engine, role=None):
     with technical_tab:
         st.json({"definition": definition, "result": result, "parameters": parameters})
         st.caption("The portable trace includes source provenance, the metric definition and result, input origins, and complete evidence.")
-        st.download_button(
+        ui.download_button(
             "Download complete calculation trace ↓",
             build_calculation_evidence_export(engine, inspection, parameters, inputs.origins, records),
             f"okai_{selected}_calculation_trace.json",
@@ -752,7 +752,7 @@ def investigation_workbench(engine, role):
         if not events.empty:
             st.dataframe(events[["event_type", "actor_role", "happened_at", "details_json"]],
                          hide_index=True, width="stretch")
-        st.download_button(
+        ui.download_button(
             "Export review summary ↓", casework.build_review_export(case, events),
             f"okai_review_{case_id}.json", "application/json",
             key=f"investigation_export_{case_id}",
@@ -775,7 +775,7 @@ def imported_incidents(engine, metadata):
         "assignment_group", "resolved_at", "source_sla_met", "reassignment_count", "source_row"] if column in frame]
     st.caption(f"{len(frame):,} final incident snapshots. Unknown assignments remain visible.")
     st.dataframe(frame[columns].head(500), hide_index=True, width="stretch", height=360)
-    st.download_button("Export incident snapshots ↓", frame[columns].to_csv(index=False).encode("utf-8"),
+    ui.download_button("Export incident snapshots ↓", frame[columns].to_csv(index=False).encode("utf-8"),
                        "okai_imported_incidents.csv", "text/csv")
     if frame.empty:
         return
@@ -815,7 +815,7 @@ def import_quality(engine, metadata):
     st.write("**Rejected source rows**")
     st.caption("A rejected event is not a duplicate incident. Its original data and rejection reason are retained.")
     st.dataframe(rejected.head(250), hide_index=True, width="stretch")
-    st.download_button("Export rejected source rows ↓", rejected.to_csv(index=False).encode("utf-8"),
+    ui.download_button("Export rejected source rows ↓", rejected.to_csv(index=False).encode("utf-8"),
                        "okai_import_rejections.csv", "text/csv")
     st.button("Inspect resolution coverage →", on_click=navigate,
               args=("Calculation Inspector", "median_resolution_hours"), key="quality_duration")
@@ -868,7 +868,7 @@ def decision_support(engine):
     st.dataframe(groups, hide_index=True, width="stretch", column_config=GROUP_COLUMN_LABELS)
     st.caption("Start by reviewing groups with a large count of adverse outcomes, then inspect case mix and data coverage. "
                "A final assignment or reassignment association does not establish responsibility or causation.")
-    st.download_button("Export investigation evidence ↓", groups.to_csv(index=False).encode("utf-8"),
+    ui.download_button("Export investigation evidence ↓", groups.to_csv(index=False).encode("utf-8"),
                        "okai_investigation_evidence.csv", "text/csv")
     st.button("Inspect the SLA definition →", on_click=navigate,
               args=("Calculation Inspector", "demo_sla_attainment" if engine.context.source_kind == "demo" else "source_sla_attainment"),

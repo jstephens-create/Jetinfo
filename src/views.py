@@ -78,7 +78,7 @@ def _open_queue(incidents, workspace_id, role, model):
                                 "assigned_team": "Assigned team", "review_state": "Review", "owner": "Owner",
                                 "breach_probability": st.column_config.ProgressColumn(
                                     "Estimated risk", min_value=0, max_value=100, format="%.0f%%")})
-    st.download_button("Export this queue ↓", view.to_csv(index=False).encode("utf-8"),
+    ui.download_button("Export this queue ↓", view.to_csv(index=False).encode("utf-8"),
                        "okai_open_incidents.csv", "text/csv", key="queue_export")
     if view.empty:
         ui.note("No incidents match these filters. Clear the search or choose all risk bands and review states.")
@@ -190,7 +190,7 @@ def _archive(incidents):
                                 "category": "Category", "affected_service": "Service", "assignment_group": "Source team",
                                 "status": "Source status", "resolution_time_minutes": "Resolution (min)",
                                 "sla_target_minutes": "SLA target (min)", "sla_outcome": "SLA outcome"})
-    st.download_button("Export filtered history ↓", view[columns].to_csv(index=False).encode("utf-8"),
+    ui.download_button("Export filtered history ↓", view[columns].to_csv(index=False).encode("utf-8"),
                        "okai_incident_history.csv", "text/csv", key="archive_export")
 
 
@@ -416,7 +416,7 @@ def data_quality(runs, workspace_id, role):
         st.dataframe(display[columns], hide_index=True, width="stretch", height=310,
                      column_config={"incident_id": "Incident", "rejection_type": "Outcome",
                                     "reason": "Recorded reason", "raw_record": "Original source row (JSON)"})
-        st.download_button("Export rejected rows ↓", display[columns].to_csv(index=False).encode("utf-8"),
+        ui.download_button("Export rejected rows ↓", display[columns].to_csv(index=False).encode("utf-8"),
                            f"okai_run_{int(selected)}_rejected.csv", "text/csv")
     with fields_tab:
         st.caption("All profiled fields, including zero counts. A field's policy is separate from its missing-value count.")
@@ -425,7 +425,7 @@ def data_quality(runs, workspace_id, role):
                      column_config={"label": "Source field", "missing_cells": "Missing cells",
                                     "source_pct": st.column_config.NumberColumn("% of source rows", format="%.1f%%"),
                                     "policy": "How to interpret a missing value"})
-        st.download_button("Export field audit ↓", audit.to_csv(index=False).encode("utf-8"),
+        ui.download_button("Export field audit ↓", audit.to_csv(index=False).encode("utf-8"),
                            f"okai_run_{int(selected)}_fields.csv", "text/csv")
     with runs_tab:
         st.dataframe(runs.drop(columns=["missing_values"]), hide_index=True, width="stretch", height=280)

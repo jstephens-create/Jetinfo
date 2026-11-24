@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OKai Â· Interactive portfolio demo</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.3/build/stlite.css">
+</head>
+<body>
+  <div id="root"><p role="status">Loading the OKai demo and its Python runtimeâ€¦</p></div>
+  <script type="module">
+    import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.3/build/stlite.js";
+
+    mount({
+      entrypoint: "app.py",
+      archives: [{ url: new URL("demo.zip", location.href).href, format: "zip" }],
+      requirements: ["plotly", "scikit-learn", "joblib", "toml"],
+      streamlitConfig: { "client.toolbarMode": "viewer", "theme.base": "light", "theme.primaryColor": "#FF512B" }
+    }, document.getElementById("root"));
+  </script>
+</body>
+</html>
