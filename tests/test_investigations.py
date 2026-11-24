@@ -86,6 +86,50 @@ def test_trace_is_reused_and_outcomes_do_not_change_evidence(tmp_path):
     assert investigations.read_investigation(second_id, db_path)["status"] == "Open"
 
 
+def test_review_export_reconciles_with_the_stored_trace_and_history(tmp_path):
+    db_path = tmp_path / "investigations.db"
+    _, trace = build_trace()
+    investigations.initialize(db_path)
+
+    case_id = investigations.create_investigation(
+        trace, "Alex Morgan", "Review the incident.", "Check service history.",
+        date(2026, 12, 1), "Analyst", db_path)
+    investigations.record_outcome(case_id, "Resolved", "Queue returned to normal.",
+                                   date(2026, 12, 3), 2.5, "hours", "Analyst", db_path)
+
+    saved = investigations.read_investigation(case_id, db_path)
+    events = investigations.read_events(case_id, db_path)
+    export = json.loads(investigations.build_review_export(saved, events))
+
+    assert export["schema"] == investigations.REVIEW_EXPORT_SCHEMA
+    assert export["investigation"]["investigation_id"] == case_id
+    assert export["investigation"]["status"] == "Outcome recorded"
+    assert export["outcome"]["outcome_status"] == "Resolved"
+    assert export["outcome"]["measured_value"] == 2.5
+    assert export["trace"]["trace_id"] == trace["trace_id"]
+    assert export["trace"]["payload_sha256"] == trace["payload_sha256"]
+    stored_trace = json.loads(saved["trace_json"])
+    assert export["trace"]["result"] == stored_trace["result"]
+    assert export["trace"]["evidence"] == stored_trace["evidence"]
+    assert [item["event_type"] for item in export["history"]] == ["created", "outcome_recorded"]
+
+
+def test_review_export_omits_history_when_no_events_are_supplied(tmp_path):
+    db_path = tmp_path / "investigations.db"
+    _, trace = build_trace()
+    investigations.initialize(db_path)
+    case_id = investigations.create_investigation(
+        trace, "Alex Morgan", "Review the incident.", "Check service history.",
+        date(2026, 12, 1), "Analyst", db_path)
+    saved = investigations.read_investigation(case_id, db_path)
+
+    export = json.loads(investigations.build_review_export(saved, pd.DataFrame()))
+
+    assert export["history"] == []
+    assert export["investigation"]["status"] == "Open"
+    assert export["outcome"]["outcome_status"] is None
+
+
 def test_invalid_case_or_unmeasured_unit_leaves_no_partial_changes(tmp_path):
     db_path = tmp_path / "investigations.db"
     _, trace = build_trace()

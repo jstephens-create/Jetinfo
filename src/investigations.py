@@ -314,6 +314,61 @@ def read_events(investigation_id: str, db_path=DB_PATH) -> pd.DataFrame:
             conn, params=(investigation_id,))
 
 
+REVIEW_EXPORT_SCHEMA = "okai.investigation-review-export.v1"
+
+
+def build_review_export(investigation: dict, events: pd.DataFrame) -> bytes:
+    """Export a saved investigation with its immutable trace and audit history.
+
+    Reuses the stored trace payload rather than recalculating it, so an export
+    always reconciles with what the Calculation Inspector displayed when the
+    review was saved. Decision fields and reported outcomes come straight from
+    the immutable/append-only tables; nothing here performs new arithmetic.
+    """
+    trace_payload = json.loads(investigation["trace_json"])
+    payload = {
+        "schema": REVIEW_EXPORT_SCHEMA,
+        "exported_at_utc": _now(),
+        "investigation": {
+            "investigation_id": investigation["investigation_id"],
+            "source_id": investigation["source_id"],
+            "source_kind": investigation["source_kind"],
+            "source_name": investigation["source_name"],
+            "incident_id": investigation["incident_id"],
+            "owner": investigation["owner"],
+            "rationale": investigation["rationale"],
+            "next_action": investigation["next_action"],
+            "follow_up_date": investigation["follow_up_date"],
+            "status": investigation["status"],
+            "created_at": investigation["created_at"],
+            "updated_at": investigation["updated_at"],
+        },
+        "outcome": {
+            "outcome_status": investigation["outcome_status"],
+            "outcome_note": investigation["outcome_note"],
+            "outcome_date": investigation["outcome_date"],
+            "measured_value": investigation["measured_value"],
+            "measured_unit": investigation["measured_unit"],
+        },
+        "trace": {
+            "trace_id": investigation["trace_id"],
+            "trace_version": investigation["trace_version"],
+            "metric_id": investigation["metric_id"],
+            "formula_version": investigation["formula_version"],
+            "evidence_sha256": investigation["evidence_sha256"],
+            "payload_sha256": investigation["payload_sha256"],
+            "source": trace_payload["source"],
+            "metric_definition": trace_payload["metric_definition"],
+            "result": trace_payload["result"],
+            "inputs": trace_payload["inputs"],
+            "evidence": trace_payload["evidence"],
+        },
+        "history": _records(events) if not events.empty else [],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True,
+                      allow_nan=False).encode("utf-8")
+
+
 def record_outcome(investigation_id: str, outcome_status: str, outcome_note: str,
                    outcome_date, measured_value=None, measured_unit: str | None = None,
                    actor_role: str = "Analyst", db_path=DB_PATH) -> None:

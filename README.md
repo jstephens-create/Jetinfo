@@ -245,7 +245,7 @@ Threshold alerts are configurable investigation rules. Age/deadline checks requi
 | `app.py` | Demo persona entry, navigation, cached facts/model, and workspace identity | Connects the portfolio walkthrough | streamlit, database, demo, ui, views |
 | `src/views.py` | Overview, Incident queue, Risk lab, Data quality, and Project notes | Interactive analysis, reviews, model evidence, and executable SQL | streamlit, plotly, database, demo, train_model |
 | `src/intelligence_views.py` | Source selection, authoritative overview, Import Desk, Calculation Inspector, investigations, historical exploration, Decision Support, and governance | Connects existing walkthroughs to the new calculation/import contracts without repeating business formulas | streamlit, event_ingestion, calculations, calculation_tools, investigations, ui |
-| `src/investigations.py` | Stable source IDs, content-addressed trace references, persistent investigation plans, and append-only outcome history | Stores compact selected-incident evidence once; cases reference immutable versioned traces | database, calculations |
+| `src/investigations.py` | Stable source IDs, content-addressed trace references, persistent investigation plans, append-only outcome history, and a reconciled JSON review export | Stores compact selected-incident evidence once; cases reference immutable versioned traces | database, calculations |
 | `src/ui.py` | Reusable layout, charts, typography, and vector artwork | Consistent presentation | streamlit, plotly |
 | `src/demo.py` | Workspace-scoped review writes, audit events, summaries, and reset | Persists demo actions without rewriting source facts | database, pandas |
 | `src/quality.py` | Reconciles run counts and prepares chart denominators | Separates source rows, overlapping rule matches, and per-field missing cells | pandas |
@@ -349,7 +349,7 @@ How to read this:
 | **Incident queue** | Synthetic source: saved risk-ranked reviews, notes, and activity. Imported source: final incident snapshots and preserved event timelines |
 | **Import Desk** | Supported UCI profile, file upload/local path, explicit timezone, mapping inspection, validation/import evidence, and source history |
 | **Calculation Inspector** | Registry definition, authoritative result, numerator/denominator, eligibility/exclusions, technical provenance, scenario inputs, CSV evidence, and a portable JSON trace bundling source context, input origins, result, and complete evidence |
-| **Investigations** | Source incident selection, row-level calculation evidence, owner/rationale/next action/follow-up date, and later user-reported outcomes linked to immutable trace references |
+| **Investigations** | Source incident selection, row-level calculation evidence, owner/rationale/next action/follow-up date, later user-reported outcomes linked to immutable trace references, and a downloadable JSON review summary reconciling decision fields, trace, and audit history |
 | **Decision Support** | Configurable investigation rules with explicit review time, source evidence, outcome concentration, and limits on causal interpretation |
 | **Risk lab** | Synthetic-source what-if scorer, contributions, model/baseline metrics, confusion matrix, ROC curve, and coefficients; imported snapshots are explicitly not scored |
 | **Data quality** | Demo saved-run quality panels or selected import validation/missing-value/rejection evidence, with explicit counting units |
