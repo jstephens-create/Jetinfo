@@ -139,6 +139,99 @@ persona selector are demo conveniences, not identity verification or tenant isol
 Local imports are shared to anyone who can run or access the application. No role,
 dataset, incident, or investigation authorization boundary is implemented.
 
+## Persistent review export verification (2026-11-24)
+
+A later change added `investigations.build_review_export`, exposed as an "Export
+review summary ↓" download in the Investigations workbench. The full suite
+completed with **200 passed, 1 skipped** (up from 169/198 passed at the prior
+checkpoints; the optional real-file UCI test remains the single skip). Targeted
+`tests\test_investigations.py` passed **7/7**, including two new cases proving
+the export reconciles with the stored immutable trace and append-only history,
+and omits history cleanly when no events exist yet.
+
+Beyond the automated suite, this change was verified against an isolated copy
+of the real demo database (`data/processed/signal.db`), never the original
+file: one process created an investigation and exited; a second, independent
+process reopened it, confirmed the decision fields and trace were unchanged,
+recorded a follow-up outcome, and exported the review. The exported JSON's
+`trace.result`, `trace.evidence`, and `trace.payload_sha256` matched the
+originally stored trace exactly. A negative case (an invalid outcome status)
+was rejected without side effects, and reusing the same trace for a second
+investigation did not duplicate the `calculation_traces` row. The original
+`signal.db` was confirmed unchanged (478 incidents, no `investigations` table)
+after this isolated check.
+
+The live Streamlit server was also started locally; `/_stcore/health` returned
+`200 ok` and the root page returned `200`. No Playwright/browser automation
+tool was connected in this environment, so interactive click-through of the
+rendered page was not captured by screenshot. The equivalent interactive path
+is instead exercised by `tests/test_app_workflows.py::test_investigation_and_follow_up_are_persistent_for_both_sources`,
+a Streamlit `AppTest` run that renders the same Investigations workbench code
+(including the new export button) for both the demo and an imported source and
+asserts no exception, both before and after recording a follow-up outcome.
+
+## Independent reviewer re-verification (2026-11-25)
+
+A separate, independent session re-verified the prior review-export change
+rather than trusting its report, using fresh evidence:
+
+- **Zero-skip baseline reconfirmed.** With `OKAI_UCI_CSV` pointed at the same
+  46,212,397-byte source already on record above, the full suite ran
+  **201 passed, 0 skipped in 94.45s**, confirming the previously reported
+  200/1-skipped count is the correct default (the real-file test is
+  intentionally opt-in) rather than an unverified claim.
+- **Imported-source full lifecycle, independently driven end-to-end.** The
+  prior checkpoint above only manually verified restart-persistence for the
+  **demo** source; this pass covered the **imported (UCI event-log) source**
+  specifically, which had previously only been covered indirectly by the
+  parametrized `AppTest`:
+  1. Imported the real file into a freshly isolated database/storage root:
+     `24,918` snapshots loaded (matches the figure on record above).
+  2. Inspected `source_sla_attainment`: `value=63.4`, `eligible_count=24918`,
+     `excluded_count=0`, `status=available` — matches the figures on record
+     above exactly.
+  3. Examined contributing/excluded records directly from the inspection
+     result (all 24,918 contributing; 0 excluded, consistent with every final
+     snapshot in this file being `Closed`).
+  4. Created an investigation against a real incident (`INC0000045`) with a
+     reviewer rationale and follow-up date.
+  5. **Ended that process entirely.**
+  6. **Started a new, independent process** and reopened the saved review by
+     ID: decision fields (`status`, `incident_id`, `rationale`) were
+     unchanged.
+  7. Recorded an outcome (`Resolved`) in the new process.
+  8. Built the review export (`build_review_export`) and wrote it to disk
+     (5,099 bytes).
+  9. **Reconciled the exported trace against a freshly recomputed
+     `CalculationEngine.inspect()` call** built from a new engine instance in
+     that same new process — not a re-read of the stored row. `value`,
+     `eligible_count`, `excluded_count`, `unit`, `status`, `metric_id`, and
+     `formula_version` all matched exactly: `63.4 / 24918 / 0`.
+- **Duplicate/negative/immutability checks repeated against this
+  imported-source database**: reusing the same trace for a second
+  investigation left `calculation_traces` at 1 row (no duplicate); an invalid
+  outcome status (`NOT_A_REAL_STATUS`) was rejected with the existing
+  message and no state change; direct SQL `UPDATE`/`DELETE` against
+  `calculation_traces`, `investigation_events`, and `investigations` decision
+  fields were all rejected by the existing triggers.
+- **No production database was touched.** All of the above used a freshly
+  created isolated directory (`imports.db` + its own storage root), separate
+  from both `data/processed/signal.db` and `data/processed/okai_imports.db`.
+- **Live browser verification: still not performed.** No Playwright or other
+  browser-automation tool is connected in this environment (confirmed by an
+  independent tool search in this session, as in the prior one). This is
+  reported explicitly as **unverified**, not claimed as passing on the
+  strength of the AppTest/backend evidence above.
+
+## Chromium review-export check
+
+On November 24, 2026, Playwright opened the real Streamlit app using an isolated
+copy of the database and two synthetic saved reviews for the same incident.
+The browser selected each review and downloaded its JSON. Both files matched
+the selected case ID, owner, rationale, next action, outcome note, and case-specific
+event history. The check also saved an updated outcome and downloaded it immediately.
+The full Python suite passed all 201 tests with the real-file test enabled.
+
 ## Reproduction
 
 Run the focused and full test suites with the project environment:
@@ -168,13 +261,14 @@ This map describes the additive architecture work, rather than treating all pre-
 |---|---|
 | [calculations.py](../src/calculations.py), [calculation_tools.py](../src/calculation_tools.py) | New deterministic registry/result/evidence service and strict read-only interpretation boundary |
 | [event_ingestion.py](../src/event_ingestion.py) | New source profile, preserved-file identity, event history, incident snapshot, rejection, and read contracts |
+| [investigations.py](../src/investigations.py) | New immutable calculation-trace reference, persistent investigation/outcome tables, and a reconciled review export (decision fields, reported outcome, trace, audit history) |
 | [intelligence_views.py](../src/intelligence_views.py) | New source-aware overview, Import Desk, Calculation Inspector, historical exploration, quality, decision, and governance views |
 | [design.py](../src/design.py) | New shared brand/color/geometry/font tokens |
 | [app.py](../app.py) | Integrates source selection, navigation, authoritative views, and the imported-data model boundary |
 | [views.py](../src/views.py) | Retains the existing overview entry point as a compatibility wrapper around the shared engine-backed view |
 | [database.py](../src/database.py), [etl.py](../src/etl.py) | Preserve public compatibility functions while delegating metric/demo-SLA arithmetic to the engine |
 | [ui.py](../src/ui.py), [charts.py](../src/charts.py) | Reuse shared tokens, preserve beveled framing and flat data marks, and apply OKai language |
-| [test_calculations.py](../tests/test_calculations.py), [test_event_ingestion.py](../tests/test_event_ingestion.py), [test_app_workflows.py](../tests/test_app_workflows.py) | New known-example, source-contract, independent-reference, numerical/tool, and UI workflow coverage |
+| [test_calculations.py](../tests/test_calculations.py), [test_event_ingestion.py](../tests/test_event_ingestion.py), [test_app_workflows.py](../tests/test_app_workflows.py), [test_investigations.py](../tests/test_investigations.py) | New known-example, source-contract, independent-reference, numerical/tool, UI workflow, and review-export coverage |
 | [README](../README.md), [architecture](ARCHITECTURE.md), [metric reference](METRICS.md), [case study](CASE_STUDY.md), [brand language](BRAND.md), this validation record | Product purpose, contracts, design choices, evidence, limitations, and reproduction |
 | [.gitignore](../.gitignore) | Excludes preserved third-party import files/exports under `data/imports/` |
 

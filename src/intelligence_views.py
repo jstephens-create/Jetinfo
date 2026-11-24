@@ -745,12 +745,19 @@ def investigation_workbench(engine, role):
             except ValueError as exc:
                 st.error(str(exc))
             else:
+                case = casework.read_investigation(case_id)
                 st.success("Follow-up outcome recorded; the calculation trace remains unchanged.")
         events = casework.read_events(case_id)
         st.markdown("**Investigation history**")
         if not events.empty:
             st.dataframe(events[["event_type", "actor_role", "happened_at", "details_json"]],
                          hide_index=True, width="stretch")
+        st.download_button(
+            "Export review summary ↓", casework.build_review_export(case, events),
+            f"okai_review_{case_id}.json", "application/json",
+            key=f"investigation_export_{case_id}",
+            help="Decision fields, reported outcome, the immutable calculation trace, "
+                 "and the audit history, in one traceable file.")
 
 
 def imported_incidents(engine, metadata):
