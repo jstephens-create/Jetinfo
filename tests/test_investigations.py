@@ -36,6 +36,30 @@ def test_stable_source_ids_do_not_depend_on_demo_run_id():
     assert json.loads(first["trace_json"])["evidence"]["records"][0]["incident_id"] == "INC-A"
 
 
+def test_review_storage_isolated_across_two_workspace_databases(tmp_path):
+    # Both teams investigate the same source and incident. A known case ID
+    # must still resolve only in the database that owns the review.
+    first, second = tmp_path / "first.db", tmp_path / "second.db"
+    _, trace = build_trace()
+    for db in (first, second):
+        investigations.initialize(db)
+    case_id = investigations.create_investigation(
+        trace, "Operations", "Verify recovery.", "Check again tomorrow.",
+        date(2026, 12, 1), "Reviewer", first)
+    assert investigations.list_investigations(trace["source_id"], second).empty
+    assert investigations.read_events(case_id, second).empty
+    with pytest.raises(ValueError, match="not found"):
+        investigations.read_investigation(case_id, second)
+    with pytest.raises(ValueError, match="not found"):
+        investigations.record_outcome(case_id, "Resolved", "Recovered.",
+                                      date(2026, 12, 2), actor_role="Reviewer", db_path=second)
+
+    saved = investigations.read_investigation(case_id, first)
+    history = investigations.read_events(case_id, first)
+    assert saved["status"] == "Open"
+    assert json.loads(investigations.build_review_export(saved, history))["investigation"]["investigation_id"] == case_id
+
+
 def test_scenario_trace_labels_user_assumptions_and_keeps_only_incident_membership():
     engine, _ = build_trace()
     parameters = {"currency": "USD", "operational_cost": 1000, "incident_count": 2}
