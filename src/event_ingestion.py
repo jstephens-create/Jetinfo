@@ -752,6 +752,14 @@ def event_count(import_id: str, db_path: Path | str = IMPORT_DB_PATH) -> int:
         return int(conn.execute("SELECT COUNT(*) FROM source_events WHERE import_id=?", (import_id,)).fetchone()[0])
 
 
+def observation_window(import_id: str, db_path: Path | str = IMPORT_DB_PATH):
+    """Use the normalized event timestamps, including for previously saved imports."""
+    with connect(db_path) as conn:
+        _require_import(conn, import_id)
+        return conn.execute("SELECT MIN(event_at), MAX(event_at) FROM source_events WHERE import_id=?",
+                            (import_id,)).fetchone()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Preserve and import a UCI incident event log into isolated OKai source tables")
     parser.add_argument("--source", type=Path, required=True)

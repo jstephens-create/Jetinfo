@@ -281,7 +281,8 @@ class CalculationEngine:
     registry = METRIC_REGISTRY
 
     def __init__(self, incidents: pd.DataFrame, events: pd.DataFrame | None = None,
-                 context: CalculationContext | None = None):
+                 context: CalculationContext | None = None, *, validated_event_count=None,
+                 load_validated_events=None):
         if "incident_id" not in incidents.columns:
             raise ValueError("Incident snapshots require incident_id.")
         self.context = context or CalculationContext("synthetic-demo", "Seeded synthetic incidents")
@@ -295,6 +296,8 @@ class CalculationEngine:
         self.events = events[event_columns].copy(deep=True).reset_index(drop=True) if events is not None else None
         self._duration_cache = None
         self._event_cache = None
+        self._validated_event_count = validated_event_count
+        self._load_validated_events = load_validated_events
 
     def _series(self, name) -> pd.Series:
         if name in self.incidents:
@@ -418,6 +421,8 @@ class CalculationEngine:
             raise ValueError(f"Unexpected parameters for {metric_id}: {sorted(set(parameters) - allowed)}")
         n = len(self.incidents)
         if metric_id == "total_event_count":
+            if self.events is None and self._load_validated_events is not None:
+                self.events = self._load_validated_events()
             if self.events is None or not {"incident_id", "event_at"}.issubset(self.events.columns):
                 result = self._result(metric_id, None, 0, 0, reason="No event history with identifiers and timestamps was supplied.")
                 return result, self._membership(frame=pd.DataFrame())
@@ -521,7 +526,8 @@ class CalculationEngine:
         """
         columns = set(self.incidents.columns)
         demo = self.context.source_kind == "demo"
-        has_events = self.events is not None and {"incident_id", "event_at"} <= set(self.events.columns)
+        has_events = self._load_validated_events is not None or (
+            self.events is not None and {"incident_id", "event_at"} <= set(self.events.columns))
         rows = {}
         for metric_id, definition in self.registry.items():
             if metric_id in SCENARIO_PARAMETERS:
@@ -548,6 +554,8 @@ class CalculationEngine:
         return rows
 
     def calculate(self, metric_id: str, parameters: Mapping[str, Any] | None = None) -> CalculationResult:
+        if metric_id == "total_event_count" and self._validated_event_count is not None and not parameters:
+            return self._result(metric_id, self._validated_event_count, self._validated_event_count, 0)
         return self._compute(metric_id, parameters)[0]
 
     def inspect(self, metric_id: str, parameters: Mapping[str, Any] | None = None) -> dict:

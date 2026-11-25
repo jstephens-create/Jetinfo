@@ -68,7 +68,7 @@ def application_data(tmp_path, monkeypatch, make_raw):
     for name in ["ensure_workspace", "read_queue", "team_summary", "read_events",
                  "save_review", "reset_workspace"]:
         redirect(demo, name, demo_db)
-    for name in ["list_imports", "read_import", "read_snapshots", "read_events", "read_rejections"]:
+    for name in ["list_imports", "read_import", "read_snapshots", "read_events", "read_rejections", "observation_window"]:
         redirect(event_ingestion, name, imports_db)
     redirect(event_ingestion, "import_event_log", imports_db, storage_root=storage)
     for name in ["initialize", "create_investigation", "list_investigations", "read_investigation",
@@ -106,6 +106,31 @@ def complete_orientation(app):
     assert app.session_state["tutorial"]["index"] == 0
     app.button(key="tutorial_continue_focus").click().run()
     assert app.session_state["tutorial"]["index"] == 1
+
+
+def test_import_overview_defers_event_rows_until_evidence_inspection(application_data, monkeypatch):
+    imported, _ = application_data
+    calls = []
+    read = event_ingestion.read_events
+
+    def track(*args, **kwargs):
+        calls.append(kwargs["columns"])
+        return read(*args, **kwargs)
+
+    monkeypatch.setattr(event_ingestion, "read_events", track)
+    engine, _ = intelligence_views.imported_engine(imported.import_id)
+    metric = "total_event_count"
+    result = engine.calculate(metric)
+    assert result.value == imported.events_loaded == 4
+    assert engine.metric_availability()[metric].group == "available"
+    assert not calls
+    evidence = engine.inspect(metric)
+    expected = result.to_dict()
+    assert {k: v for k, v in evidence["result"].items() if k != "calculated_at"} == {
+        k: v for k, v in expected.items() if k != "calculated_at"}
+    assert len(evidence["records"]) == 4
+    engine.inspect(metric)
+    assert calls == [["incident_id", "source_row", "event_at"]]
 
 
 def test_entry_point_demo_function_references_exist():
