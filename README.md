@@ -14,7 +14,7 @@ The [metric reference](docs/METRICS.md), [event-log case study](docs/CASE_STUDY.
 
 ## Quick start
 
-[Try the live OKai demo](https://jstephens-create.github.io/Jetinfo/) and choose **Start guided demo**. The first visit loads Python in your browser. Each tab has a disposable copy of the synthetic dataset. Download any review you want to keep before refreshing. The local edition below also supports CSV imports and persistent workspaces.
+[Try the incident explorer](https://jstephens-create.github.io/Jetinfo/) to filter the synthetic queue, inspect model scores and SLA outcomes, and download incident evidence. The explorer uses data prepared during deployment. For guided missions, investigation reviews, and the Risk lab, open the [full workspace](https://jstephens-create.github.io/Jetinfo/workspace.html). That edition loads Python on first use and keeps changes in the current tab until refresh. The local edition also supports CSV imports and persistent workspaces.
 
 ### Windows / VS Code
 

@@ -1,11 +1,12 @@
 """Build a clean browser bundle from the committed synthetic source."""
 import argparse
+import json
 from pathlib import Path
 import shutil
 from tempfile import TemporaryDirectory
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from src import etl, train_model
+from src import database as storage, etl, train_model
 from src.config import ROOT
 
 
@@ -18,13 +19,25 @@ def build(destination):
         etl.run_pipeline("data/raw/incidents_raw.csv", database,
                          database.with_suffix(".csv"), staging / "rejected.csv")
         train_model.train(database, model, model.with_name("metrics.json"))
+        columns = ["incident_id", "affected_service", "category", "priority", "status",
+                   "assignment_group", "created_at", "sla_target_minutes", "resolution_time_minutes",
+                   "sla_breached", "breach_probability", "risk_level"]
+        incidents = storage.read_incidents(database).sort_values(
+            ["breach_probability", "incident_id"], ascending=[False, True])
+        snapshot = {"metrics": storage.kpi_summary(database), "columns": columns,
+                    "rows": json.loads(incidents[columns].to_json(orient="values"))}
+        template = (ROOT / "public_demo/index.html").read_text(encoding="utf-8")
+        data = json.dumps(snapshot, separators=(",", ":"), allow_nan=False).replace("<", "\\u003c")
+        (destination / "index.html").write_text(template.replace("SNAPSHOT_JSON", data), encoding="utf-8")
         with ZipFile(destination / "demo.zip", "w", ZIP_DEFLATED) as archive:
             for file in [ROOT / "app.py", *sorted((ROOT / "src").glob("*.py")),
                          *sorted((ROOT / "assets").glob("*.svg"))]:
                 archive.write(file, file.relative_to(ROOT))
             for file in [database, model, model.with_name("metrics.json")]:
                 archive.write(file, file.relative_to(staging))
-    shutil.copyfile(ROOT / "public_demo/index.html", destination / "index.html")
+    for name in ["workspace.html", "demo.css", "demo.js"]:
+        shutil.copyfile(ROOT / "public_demo" / name, destination / name)
+    shutil.copyfile(ROOT / "assets/okai-wordmark.svg", destination / "okai-wordmark.svg")
 
 
 if __name__ == "__main__":

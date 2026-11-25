@@ -1,22 +1,23 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OKai Â· Interactive portfolio demo</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.3/build/stlite.css">
-</head>
-<body>
-  <div id="root"><p role="status">Loading the OKai demo and its Python runtimeâ€¦</p></div>
-  <script type="module">
-    import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.3/build/stlite.js";
-
-    mount({
-      entrypoint: "app.py",
-      archives: [{ url: new URL("demo.zip", location.href).href, format: "zip" }],
-      requirements: ["plotly", "scikit-learn", "joblib", "toml"],
-      streamlitConfig: { "client.toolbarMode": "viewer", "theme.base": "light", "theme.primaryColor": "#FF512B" }
-    }, document.getElementById("root"));
-  </script>
-</body>
-</html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OKai · Incident explorer</title>
+<link rel="stylesheet" href="./demo.css">
+<script>if (["workspace", "open"].some(key => new URLSearchParams(location.search).has(key))) location.replace("./workspace.html" + location.search + location.hash);</script>
+<script defer src="./demo.js"></script>
+</head><body>
+<header><img src="./okai-wordmark.svg" width="70" height="46" alt="OKai"><span>Operational decision intelligence</span><a href="./workspace.html">Full workspace ↗</a></header>
+<main><p class="eyebrow">Synthetic incident data · Jan–Jun 2024</p>
+<h1>Incident explorer</h1><p class="intro">Explore service incidents, compare model scores with recorded outcomes, and download the evidence.</p>
+<section class="metrics" aria-label="Dataset summary">
+<div><span>Total incidents</span><strong id="total"></strong></div>
+<div><span>SLA attainment</span><strong id="attainment"></strong></div>
+<div><span>Unresolved</span><strong id="open"></strong></div></section>
+<div class="layout"><section aria-labelledby="queue"><h2 id="queue">Incident queue</h2>
+<div class="controls"><label>Search<input type="search" id="search" placeholder="Incident ID or service"></label>
+<label>Priority<select id="priority"><option value="">All priorities</option></select></label></div>
+<p id="count" aria-live="polite"></p><div id="rows"></div><nav aria-label="Queue pages"><button id="prev">Previous</button><button id="next">Next</button></nav></section>
+<section class="detail" aria-labelledby="selected"><h2 id="selected">Incident evidence</h2><div id="evidence"></div>
+<button id="download">Download incident evidence</button></section></div>
+<footer>For guided missions, saved investigation reviews, and the Risk lab, <a href="./workspace.html">open the full Python workspace</a>. Its first visit loads the analysis runtime.</footer></main>
+<script id="snapshot" type="application/json">SNAPSHOT_JSON</script></body></html>
