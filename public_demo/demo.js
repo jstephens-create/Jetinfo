@@ -1,7 +1,14 @@
 "use strict";
 const byId = id => document.getElementById(id);
-const { metrics, columns, rows } = JSON.parse(byId("snapshot").textContent);
-const incidents = rows.map(row => Object.fromEntries(columns.map((field, i) => [field, row[i]])));
+const snapshot = JSON.parse(byId("snapshot").textContent);
+const { metrics, columns, rows } = snapshot;
+const record = row => Object.fromEntries(columns.map((field, i) => [field, row[i]]));
+const initial = rows.map(record);
+const incidents = snapshot.index ? snapshot.index.map(([incident_id, service, priority], position) => ({
+  incident_id, affected_service: snapshot.services[service], priority: snapshot.priorities[priority], position
+})) : initial;
+const chunks = new Map();
+let selectionVersion = 0;
 let matches = incidents, page = 0, selected;
 const pageSize = 6;
 const percent = value => (100 * value).toFixed(1) + "%";
@@ -14,13 +21,46 @@ byId("total").textContent = metrics.total_incidents;
 byId("attainment").textContent = metrics.sla_compliance_pct + "%";
 byId("open").textContent = metrics.open_incidents;
 for (const priority of ["Critical", "High", "Medium", "Low"]) byId("priority").add(new Option(priority, priority));
-function showEvidence(incident) {
-  selected = incident;
+async function showEvidence(incident) {
+  const version = ++selectionVersion;
+  selected = undefined;
   const evidence = byId("evidence");
   evidence.replaceChildren();
-  byId("download").disabled = !incident;
+  byId("download").disabled = true;
   for (const row of byId("rows").children) row.setAttribute("aria-pressed", String(row.dataset.id === incident?.incident_id));
   if (!incident) { evidence.append(element("p", "No incidents match these filters.")); return; }
+  if (snapshot.index) {
+    const position = incident.position;
+    if (position < initial.length) {
+      incident = initial[position];
+    } else {
+      evidence.textContent = "Loading incident evidence…";
+      const url = snapshot.chunks[Math.floor(position / snapshot.chunkSize)];
+      if (!chunks.has(url)) {
+        const request = fetch(url).then(response => {
+          if (!response.ok) throw Error("Evidence unavailable");
+          return response.json();
+        });
+        if (chunks.size >= 8) chunks.delete(chunks.keys().next().value);
+        chunks.set(url, request);
+      }
+      const request = chunks.get(url);
+      try {
+        const batch = await request;
+        if (version !== selectionVersion) return;
+        const detail = record(batch[position % snapshot.chunkSize]);
+        if (detail.incident_id !== incident.incident_id) throw Error("Evidence mismatch");
+        incident = detail;
+      } catch {
+        if (chunks.get(url) === request) chunks.delete(url);
+        if (version === selectionVersion) evidence.textContent = "Evidence could not load. Select the incident again to retry.";
+        return;
+      }
+      evidence.replaceChildren();
+    }
+  }
+  selected = incident;
+  byId("download").disabled = false;
   const facts = document.createElement("dl");
   const outcome = incident.sla_breached === null ? "Pending" : incident.sla_breached ? "Missed" : "Met";
   for (const [key, value] of Object.entries({

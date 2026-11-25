@@ -2,18 +2,20 @@ name: Publish interactive portfolio demo
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: portfolio-pages
+  group: portfolio-pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -22,11 +24,22 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.txt scikit-learn==1.8.0
       - run: python -m public_demo.build dist
+      - name: Install browser checks outside the published site
+        run: |
+          npm install --prefix "$RUNNER_TEMP/okai-browser" playwright@1.56.1
+          "$RUNNER_TEMP/okai-browser/node_modules/.bin/playwright" install --with-deps chromium
+          echo "NODE_PATH=$RUNNER_TEMP/okai-browser/node_modules" >> "$GITHUB_ENV"
+      - name: Check the explorer at three dataset sizes
+        run: |
+          set -o pipefail
+          python -m public_demo.benchmark dist | tee "$RUNNER_TEMP/explorer-bench.jsonl"
+          cat "$RUNNER_TEMP/explorer-bench.jsonl" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     permissions:

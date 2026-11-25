@@ -16,6 +16,12 @@ The [metric reference](docs/METRICS.md), [event-log case study](docs/CASE_STUDY.
 
 [Try the incident explorer](https://jstephens-create.github.io/Jetinfo/) to filter the synthetic queue, inspect model scores and SLA outcomes, and download incident evidence. The explorer uses data prepared during deployment. For guided missions, investigation reviews, and the Risk lab, open the [full workspace](https://jstephens-create.github.io/Jetinfo/workspace.html). That edition loads Python on first use and keeps changes in the current tab until refresh. The local edition also supports CSV imports and persistent workspaces.
 
+### Browser performance checks
+
+The Pages build runs a Chromium release check against the production bundle and temporary 5,000- and 50,000-incident fixtures. Each scenario gets three fresh browser sessions at a 390-pixel viewport, 4× CPU slowdown, 70 ms latency and 750 KB/s download bandwidth. The workflow summary records first evidence time, initial response-body bytes, time to find and display a distant record, and JavaScript heap use after interactions. The checks enforce initial byte budgets, validate exported evidence against the source record, and reject eager Python runtime requests.
+
+To reproduce the measurements, build to a fresh temporary directory with `python -m public_demo.build DIRECTORY`, install Playwright and Chromium as shown in the [Pages workflow](.github/workflows/demo.yml), and run `python -m public_demo.benchmark DIRECTORY`. The 478-row portfolio snapshot fits in one page. Builds above 1,000 rows embed a compact index and the first six records, then fetch evidence in content-addressed groups of 128 records.
+
 ### Windows / VS Code
 
 Open the `Jetinfo` folder itself in VS Code (File > Open Folder). It is the

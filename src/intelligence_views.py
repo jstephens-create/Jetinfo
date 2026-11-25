@@ -70,27 +70,27 @@ def demo_engine(incidents, runs):
         observation_end=str(incidents.created_at.max()) if not incidents.empty else None))
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=2)
 def imported_payload(import_id):
     """Imports are immutable, so their ID is a safe cache key across reruns."""
     metadata = imports.read_import(import_id)
     snapshots = imports.read_snapshots(import_id)
-    # Only the three fields used for event counts/window/lineage are needed for
-    # the engine. Raw JSON for 141k events would waste memory on every page.
-    events = imports.read_events(import_id, columns=["incident_id", "source_row", "event_at"])
-    return metadata, snapshots, events
+    return metadata, snapshots, imports.observation_window(import_id)
 
 
 def imported_engine(import_id):
-    metadata, snapshots, events = imported_payload(import_id)
+    metadata, snapshots, (start, end) = imported_payload(import_id)
     context = CalculationContext(
         dataset_id=import_id, import_id=import_id, source_kind="event_log",
         source_name=metadata.get("source_name", "Imported incident event log"),
         timezone=metadata.get("timestamp_timezone") or "unknown",
-        observation_start=str(events.event_at.min()) if not events.empty else None,
-        observation_end=str(events.event_at.max()) if not events.empty else None,
+        observation_start=start, observation_end=end,
         warnings=tuple(metadata.get("warnings", [])))
-    return CalculationEngine(snapshots, events=events, context=context), metadata
+    # Intake validates event timestamps and the engine validates snapshot IDs.
+    # Detailed event membership is only required when inspecting its evidence.
+    return CalculationEngine(snapshots, context=context, validated_event_count=metadata["events_loaded"],
+                             load_validated_events=lambda: imports.read_events(
+                                 import_id, columns=["incident_id", "source_row", "event_at"])), metadata
 
 
 def source_selector():
